@@ -1,0 +1,10 @@
+[package]
+name = "zinit"
+version = "0.1.0"
+authors = ["Muhamad Azmy <muhamad.azmy@codescalers.com>"]
+edition = "2018"
+
+[dependencies]
+futures = "0.1"
+tokio = "0.1"
+tokio-process = "0.2"
