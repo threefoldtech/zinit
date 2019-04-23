@@ -1,4 +1,4 @@
-use future::lazy;
+use futures::{future, lazy};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::prelude::*;
@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use tokio::timer;
 
 /// State is the process state
+#[derive(Debug)]
 enum State {
     Scheduled,
     Running,
@@ -16,7 +17,7 @@ enum State {
 #[derive(Debug)]
 enum Message {
     Tick,
-    Done,
+    State(State),
 }
 
 /// Manager is the main entry point, it keeps track of the
@@ -55,14 +56,11 @@ impl Manager {
         }));
     }
 
-    pub fn monitor(&self) {
-        //, process: Process) {
-        tokio::spawn(lazy(|| {
-            // process.and_then(||{
+    pub fn monitor(&mut self, name: String, cmd: String) {
+        self.states.insert(name.clone(), State::Scheduled);
+        let tx = self.tx.clone();
 
-            // })
-            Ok(())
-        }));
+        tokio::spawn(Oneshot::new(name, tx));
     }
 
     pub fn run(&mut self) -> impl Future<Item = (), Error = ()> {
@@ -83,6 +81,19 @@ impl Manager {
             println!("error: {}", e);
             ()
         })
+    }
+}
+
+struct Oneshot {
+    tx: mpsc::Sender<Message>,
+}
+
+impl Oneshot {
+    fn new(name: String, tx: mpsc::Sender<Message>) -> impl Future<Item = (), Error = ()> {
+        future::ok(Message::State(State::Success))
+            .and_then(move |msg| tx.send(msg))
+            .map(|_| ())
+            .map_err(|_| ())
     }
 }
 

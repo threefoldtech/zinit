@@ -11,7 +11,7 @@ use tokio_process::CommandExt;
 #[macro_use]
 extern crate futures;
 
-fn main() {
+fn main2() {
     let mut child = Command::new("ls").arg("-l").arg(".").status_async();
 
     let future = child
@@ -22,9 +22,10 @@ fn main() {
     tokio::run(future);
 }
 
-fn main2() {
+fn main() {
     tokio::run(lazy(|| {
         let mut manager = manager::Manager::new();
+        manager.monitor("test".to_string(), "ls".to_string());
         manager.run()
     }));
 }
