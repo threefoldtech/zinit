@@ -22,20 +22,32 @@ impl Process {
         };
     }
 }
-/// State is the process state
+/// Service state
 #[derive(Debug)]
 enum State {
+    /// service is scheduled for execution
     Scheduled,
+    /// service has been started, it didn't exit yet (or status wasn't checked until this moment)
     Running,
+    /// service has exited with success state, only one-shot can stay in this state
     Success,
+    /// service exited with this error
     Error(ExitStatus),
+    /// failed to spawn the process (todo: add more info)
     Failure,
 }
 
+/// Message defines the process manager internal messaging
 #[derive(Debug)]
 enum Message {
+    /// Monitor, starts a new service and monitor it
     Monitor(String, Service),
+    /// Exit, notify the manager that a service has exited with the given
+    /// exit status. Once the manager receives this message, it decides
+    /// either to re-spawn or exit based on the service configuration provided
+    /// by the monitor message
     Exit(String, ExitStatus),
+    /// ReSpawn a service after exit
     ReSpawn(String),
 }
 
@@ -45,7 +57,6 @@ pub struct Handle {
 
 impl Handle {
     pub fn monitor(&self, name: String, service: Service) {
-        //self.states.insert(name.clone(), State::Scheduled);
         let tx = self.tx.clone();
         tokio::spawn(lazy(move || {
             tx.send(Message::Monitor(name, service))
@@ -66,6 +77,7 @@ pub struct Manager {
 }
 
 impl Manager {
+    /// creates a new manager instance
     pub fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -76,15 +88,22 @@ impl Manager {
         }
     }
 
-    fn exec(&mut self, name: String, config: Service) {
-        let child = match Command::new("date").spawn_async() {
+    /// exec a service given the name
+    fn exec(&mut self, name: String) {
+        let mut process = self.processes.get_mut(&name).unwrap();
+
+        let args = shlex::split(&process.config.exec).unwrap();
+        let child = match Command::new(&args[0]).args(&args[1..]).spawn_async() {
             Ok(child) => child,
             Err(err) => {
-                self.processes.get_mut(&name).unwrap().state = State::Failure;
+                process.state = State::Failure;
                 return;
             }
         };
 
+        process.state = State::Running;
+        //TODO: for long running services the `test` command line
+        //must be executed after spawning the child
         let tx = self.tx.clone();
         let future = child
             .map_err(|_| {
@@ -99,16 +118,13 @@ impl Manager {
 
     /// handle the monitor message
     fn monitor(&mut self, name: String, service: Service) {
-        let config = service.clone();
         self.processes.insert(name.clone(), Process::new(service));
-        self.exec(name.clone(), config);
+        self.exec(name);
     }
 
     /// handle the re-spawn message
     fn re_spawn(&mut self, name: String) {
-        let process = self.processes.get(&name).unwrap();
-        let config = process.config.clone();
-        self.exec(name.clone(), config);
+        self.exec(name);
     }
 
     /// handle process exit
@@ -140,7 +156,7 @@ impl Manager {
 
         tokio::spawn(f);
     }
-
+    /// process different message types
     fn process(&mut self, msg: Message) {
         match msg {
             Message::Monitor(name, service) => self.monitor(name, service),
@@ -150,9 +166,8 @@ impl Manager {
         }
     }
 
-    pub fn run(mut self) -> (Handle, impl Future<Item = (), Error = ()>) {
-        println!("running manager");
-
+    /// run moves the manager, and return a handle.
+    pub fn run(mut self) -> Handle {
         let rx = match self.rx.take() {
             Some(rx) => rx,
             None => panic!("manager is already running"),
@@ -160,6 +175,7 @@ impl Manager {
 
         let tx = self.tx.clone();
 
+        // start the process manager main loop
         let future = rx
             .for_each(move |msg| {
                 self.process(msg);
@@ -170,6 +186,7 @@ impl Manager {
                 ()
             });
 
-        return (Handle { tx }, future);
+        tokio::spawn(future);
+        Handle { tx }
     }
 }

@@ -12,40 +12,26 @@ use tokio_process::CommandExt;
 #[macro_use]
 extern crate futures;
 
-fn main2() {
-    let mut child = Command::new("ls").arg("-l").arg(".").status_async();
-
-    let future = child
-        .expect("failed to spawn")
-        .map(|status| println!("the command exist with {}", status))
-        .map_err(|_| ()); //let child = child.arg("-l").arg("/");
-                          // child.status_async();
-    tokio::run(future);
-}
-
 fn main() {
     tokio::run(lazy(|| {
+        // creating a new instance from the process manager
         let manager = manager::Manager::new();
 
-        let (handle, future) = manager.run();
+        // running the manager returns a handle that we can
+        // use to actually control the process manager
+        // currently the handle only exposes one method
+        // `monitor` which spawns a new task on the process
+        // manager given the configuration
+        let handle = manager.run();
         handle.monitor(
             "test".to_string(),
             settings::Service {
-                exec: "ls".to_string(),
+                exec: "date".to_string(),
                 one_shot: false,
                 after: vec![],
             },
         );
 
-        // handle.monitor(
-        //     "test2".to_string(),
-        //     settings::Service {
-        //         exec: "ls".to_string(),
-        //         one_shot: true,
-        //         after: vec![],
-        //     },
-        // );
-
-        future
+        Ok(())
     }));
 }
