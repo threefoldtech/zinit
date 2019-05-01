@@ -1,16 +1,14 @@
 use future::lazy;
 use tokio::prelude::*;
 
+#[allow(dead_code)]
 mod manager;
+#[allow(dead_code)]
 mod settings;
 
-use std::process::Command;
-
-use tokio::prelude::*;
-use tokio_process::CommandExt;
-
-#[macro_use]
 extern crate futures;
+#[macro_use]
+extern crate failure;
 
 fn main() {
     tokio::run(lazy(|| {

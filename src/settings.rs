@@ -1,32 +1,18 @@
+use failure::Error;
 use serde::{Deserialize, Serialize};
 use serde_yaml as yaml;
 use std::collections::HashMap;
-use std::default::Default;
-use std::error::Error;
 use std::ffi::OsStr;
-use std::fmt;
-use std::fs::{self, DirEntry, File};
+use std::fs::{self, File};
 use std::path::Path;
 
-#[derive(Debug)]
-struct SettingsError(String);
-
-impl fmt::Display for SettingsError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
+#[derive(Debug, Fail)]
+enum SettingsError {
+    #[fail(display = "invalid file: {}", name)]
+    InvalidFile { name: String },
 }
 
-impl SettingsError {
-    fn new(s: &str) -> Box<SettingsError> {
-        let e = SettingsError(String::from(s));
-        Box::new(e)
-    }
-}
-
-impl Error for SettingsError {}
-
-type Result<T> = std::result::Result<T, Box<Error>>;
+type Result<T> = std::result::Result<T, Error>;
 pub type Services = HashMap<String, Service>;
 
 #[serde(default)]
@@ -55,9 +41,13 @@ pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
     let name = match p.file_stem() {
         Some(name) => match name.to_str() {
             Some(name) => name,
-            None => return Err(SettingsError::new("invalid file name")),
+            None => bail!(SettingsError::InvalidFile {
+                name: String::from(p.to_str().unwrap())
+            }),
         },
-        None => return Err(SettingsError::new("invalid file name")),
+        None => bail!(SettingsError::InvalidFile {
+            name: String::from(p.to_str().unwrap())
+        }),
     };
 
     let file = File::open(p)?;
@@ -71,9 +61,13 @@ pub enum Walk {
     Continue,
 }
 
-pub fn walk<T: AsRef<Path>, F>(p: T, cb: F) -> Result<Services>
+/// walks over a directory and load all configuration files.
+/// the callback is called with any error that is encountered on loading
+/// a file, the callback can decide to either ignore the file, or stop
+/// the directory walking
+pub fn load_dir<T: AsRef<Path>, F>(p: T, cb: F) -> Result<Services>
 where
-    F: Fn(&Path, &Box<Error>) -> Walk,
+    F: Fn(&Path, &Error) -> Walk,
 {
     let mut services: Services = HashMap::new();
 

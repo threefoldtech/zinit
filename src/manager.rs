@@ -1,5 +1,4 @@
-use failure::Error;
-use futures::{future, lazy};
+use futures::lazy;
 use std::collections::HashMap;
 use std::process::{Command, ExitStatus};
 use tokio::prelude::*;
@@ -95,7 +94,7 @@ impl Manager {
         let args = shlex::split(&process.config.exec).unwrap();
         let child = match Command::new(&args[0]).args(&args[1..]).spawn_async() {
             Ok(child) => child,
-            Err(err) => {
+            Err(_) => {
                 process.state = State::Failure;
                 return;
             }
@@ -162,7 +161,7 @@ impl Manager {
             Message::Monitor(name, service) => self.monitor(name, service),
             Message::Exit(name, status) => self.exit(name, status),
             Message::ReSpawn(name) => self.re_spawn(name),
-            _ => println!("Unhandled message {:?}", msg),
+            //_ => println!("Unhandled message {:?}", msg),
         }
     }
 
