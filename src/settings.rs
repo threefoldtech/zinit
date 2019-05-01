@@ -38,6 +38,16 @@ pub struct Service {
     pub after: Vec<String>,
 }
 
+impl Clone for Service {
+    fn clone(&self) -> Self {
+        return Service {
+            exec: self.exec.clone(),
+            one_shot: self.one_shot,
+            after: self.after.clone(),
+        };
+    }
+}
+
 /// load loads a single file
 pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
     let p = t.as_ref();

@@ -1,8 +1,7 @@
 use failure::Error;
 use futures::{future, lazy};
 use std::collections::HashMap;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, ExitStatus};
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
@@ -29,15 +28,15 @@ enum State {
     Scheduled,
     Running,
     Success,
-    Error { code: u16 },
+    Error(ExitStatus),
+    Failure,
 }
 
 #[derive(Debug)]
 enum Message {
-    Tick,
-    State(State),
-    Monitor((String, Service)),
-    Exit,
+    Monitor(String, Service),
+    Exit(String, ExitStatus),
+    ReSpawn(String),
 }
 
 pub struct Handle {
@@ -49,7 +48,7 @@ impl Handle {
         //self.states.insert(name.clone(), State::Scheduled);
         let tx = self.tx.clone();
         tokio::spawn(lazy(move || {
-            tx.send(Message::Monitor((name, service)))
+            tx.send(Message::Monitor(name, service))
                 .map(|_| ())
                 .map_err(|_| ())
         }));
@@ -77,32 +76,76 @@ impl Manager {
         }
     }
 
-    fn keep_alive(&self) {
-        // this ticker is just to make sure the tokio runtime will never shutdown
-        // even if no more services are being monitored.
-        // By having a long living future that will never exit
-        tokio::spawn(lazy(|| {
-            let ticker = timer::Interval::new_interval(Duration::from_secs(600));
-            ticker
-                .for_each(move |t| {
-                    Ok(())
-                    // let tx = tx.clone();
-                    // tx.send(Message::Tick).then(|_| Ok(()))
-                })
-                .map(|_| ())
-                .map_err(|_| ())
-        }));
+    fn exec(&mut self, name: String, config: Service) {
+        let child = match Command::new("date").spawn_async() {
+            Ok(child) => child,
+            Err(err) => {
+                self.processes.get_mut(&name).unwrap().state = State::Failure;
+                return;
+            }
+        };
+
+        let tx = self.tx.clone();
+        let future = child
+            .map_err(|_| {
+                panic!("failed to wait for child");
+            })
+            .and_then(move |status| tx.send(Message::Exit(name, status)))
+            .map(|_| ())
+            .map_err(|_| ());
+
+        tokio::spawn(future);
     }
 
+    /// handle the monitor message
     fn monitor(&mut self, name: String, service: Service) {
+        let config = service.clone();
         self.processes.insert(name.clone(), Process::new(service));
-        exec(self.tx.clone(), name);
-        println!("executed");
+        self.exec(name.clone(), config);
+    }
+
+    /// handle the re-spawn message
+    fn re_spawn(&mut self, name: String) {
+        let process = self.processes.get(&name).unwrap();
+        let config = process.config.clone();
+        self.exec(name.clone(), config);
+    }
+
+    /// handle process exit
+    fn exit(&mut self, name: String, status: ExitStatus) {
+        let process = match self.processes.get_mut(&name) {
+            Some(process) => process,
+            None => return,
+        };
+
+        process.state = if status.success() {
+            State::Success
+        } else {
+            State::Error(status)
+        };
+
+        if process.config.one_shot {
+            return;
+        }
+
+        use std::time::{Duration, Instant};
+
+        let tx = self.tx.clone();
+        let now = Instant::now() + Duration::from_secs(2);
+        let f = timer::Delay::new(now)
+            .map_err(|_| panic!("timer failed"))
+            .and_then(move |_| tx.send(Message::ReSpawn(name)))
+            .map(|_| ())
+            .map_err(|_| ());
+
+        tokio::spawn(f);
     }
 
     fn process(&mut self, msg: Message) {
         match msg {
-            Message::Monitor((name, service)) => self.monitor(name, service),
+            Message::Monitor(name, service) => self.monitor(name, service),
+            Message::Exit(name, status) => self.exit(name, status),
+            Message::ReSpawn(name) => self.re_spawn(name),
             _ => println!("Unhandled message {:?}", msg),
         }
     }
@@ -115,17 +158,13 @@ impl Manager {
             None => panic!("manager is already running"),
         };
 
-        //self.keep_alive();
         let tx = self.tx.clone();
 
         let future = rx
             .for_each(move |msg| {
-                println!("got message {:?}", msg);
                 self.process(msg);
-                //println!("message");
                 Ok(())
             })
-            //.map(|_| println!("exit loop"))
             .map_err(|e| {
                 println!("error: {}", e);
                 ()
@@ -134,68 +173,3 @@ impl Manager {
         return (Handle { tx }, future);
     }
 }
-
-fn exec(tx: Sender, cmd: String) -> Result<(), Error> {
-    let child = Command::new("echo")
-        .arg("hello")
-        .arg("world")
-        .spawn_async()?;
-
-    let future = child
-        .map(move |status| {
-            println!("exit status {}", status);
-            tx.send(Message::Exit).and_then(|tx| tx.flush())
-        })
-        .map(|tx| println!("transmitted"))
-        .map_err(|e| {
-            println!("failed to wait for exit status: {}", e);
-        });
-
-    tokio::spawn(future);
-
-    Ok(())
-}
-struct Oneshot {
-    tx: mpsc::Sender<Message>,
-}
-
-impl Oneshot {
-    fn new(name: String, tx: mpsc::Sender<Message>) -> impl Future<Item = (), Error = ()> {
-        future::ok(Message::State(State::Success))
-            .and_then(move |msg| tx.send(msg))
-            .map(|_| ())
-            .map_err(|_| ())
-    }
-}
-
-// struct OneShotFuture {}
-
-// impl Future for OneShotFuture {
-//     type Item = Message;
-//     type Error = ();
-
-//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-//         Ok(Async::Ready(Message::Done))
-//     }
-// }
-
-// /// Process defines the process type
-// pub enum Process {
-//     OneShot(mpsc::Sender<Message>, OneShotFuture),
-// }
-
-// impl Future for Process {
-//     type Item = ();
-//     type Error = ();
-
-//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-//         match self {
-//             Process::OneShot(tx, ref mut handle) => {
-//                 let out = try_ready!(handle.poll());
-//                 tx.send(out);
-
-//                 Ok(Async::Ready(()))
-//             }
-//         }
-//     }
-// }

@@ -32,21 +32,20 @@ fn main() {
             "test".to_string(),
             settings::Service {
                 exec: "ls".to_string(),
-                one_shot: true,
+                one_shot: false,
                 after: vec![],
             },
         );
 
-        handle.monitor(
-            "test2".to_string(),
-            settings::Service {
-                exec: "ls".to_string(),
-                one_shot: true,
-                after: vec![],
-            },
-        );
+        // handle.monitor(
+        //     "test2".to_string(),
+        //     settings::Service {
+        //         exec: "ls".to_string(),
+        //         one_shot: true,
+        //         after: vec![],
+        //     },
+        // );
 
-        println!("returning future");
         future
     }));
 }
