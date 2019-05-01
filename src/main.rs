@@ -2,6 +2,7 @@ use future::lazy;
 use tokio::prelude::*;
 
 mod manager;
+mod settings;
 
 use std::process::Command;
 
@@ -24,8 +25,28 @@ fn main2() {
 
 fn main() {
     tokio::run(lazy(|| {
-        let mut manager = manager::Manager::new();
-        manager.monitor("test".to_string(), "ls".to_string());
-        manager.run()
+        let manager = manager::Manager::new();
+
+        let (handle, future) = manager.run();
+        handle.monitor(
+            "test".to_string(),
+            settings::Service {
+                exec: "ls".to_string(),
+                one_shot: true,
+                after: vec![],
+            },
+        );
+
+        handle.monitor(
+            "test2".to_string(),
+            settings::Service {
+                exec: "ls".to_string(),
+                one_shot: true,
+                after: vec![],
+            },
+        );
+
+        println!("returning future");
+        future
     }));
 }

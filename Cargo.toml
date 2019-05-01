@@ -5,6 +5,9 @@ authors = ["Muhamad Azmy <muhamad.azmy@codescalers.com>"]
 edition = "2018"
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8.8"
 futures = "0.1"
 tokio = "0.1"
 tokio-process = "0.2"
+failure = "0.1"

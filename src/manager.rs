@@ -1,10 +1,28 @@
+use failure::Error;
 use futures::{future, lazy};
 use std::collections::HashMap;
+use std::process::Command;
 use std::time::Duration;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
+use tokio_process::CommandExt;
 
+use crate::settings::Service;
+
+struct Process {
+    state: State,
+    config: Service,
+}
+
+impl Process {
+    fn new(service: Service) -> Process {
+        return Process {
+            state: State::Scheduled,
+            config: service,
+        };
+    }
+}
 /// State is the process state
 #[derive(Debug)]
 enum State {
@@ -18,22 +36,42 @@ enum State {
 enum Message {
     Tick,
     State(State),
+    Monitor((String, Service)),
+    Exit,
 }
+
+pub struct Handle {
+    tx: Sender,
+}
+
+impl Handle {
+    pub fn monitor(&self, name: String, service: Service) {
+        //self.states.insert(name.clone(), State::Scheduled);
+        let tx = self.tx.clone();
+        tokio::spawn(lazy(move || {
+            tx.send(Message::Monitor((name, service)))
+                .map(|_| ())
+                .map_err(|_| ())
+        }));
+    }
+}
+
+type Sender = mpsc::UnboundedSender<Message>;
 
 /// Manager is the main entry point, it keeps track of the
 /// processes state, and spawn them based on the dependencies.
 pub struct Manager {
-    states: HashMap<String, State>,
-    tx: mpsc::Sender<Message>,
-    rx: Option<mpsc::Receiver<Message>>,
+    processes: HashMap<String, Process>,
+    tx: Sender,
+    rx: Option<mpsc::UnboundedReceiver<Message>>,
 }
 
 impl Manager {
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel(10);
+        let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
-            states: HashMap::new(),
+            processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),
         }
@@ -43,7 +81,7 @@ impl Manager {
         // this ticker is just to make sure the tokio runtime will never shutdown
         // even if no more services are being monitored.
         // By having a long living future that will never exit
-        tokio::spawn(lazy(move || {
+        tokio::spawn(lazy(|| {
             let ticker = timer::Interval::new_interval(Duration::from_secs(600));
             ticker
                 .for_each(move |t| {
@@ -56,14 +94,20 @@ impl Manager {
         }));
     }
 
-    pub fn monitor(&mut self, name: String, cmd: String) {
-        self.states.insert(name.clone(), State::Scheduled);
-        let tx = self.tx.clone();
-
-        tokio::spawn(Oneshot::new(name, tx));
+    fn monitor(&mut self, name: String, service: Service) {
+        self.processes.insert(name.clone(), Process::new(service));
+        exec(self.tx.clone(), name);
+        println!("executed");
     }
 
-    pub fn run(&mut self) -> impl Future<Item = (), Error = ()> {
+    fn process(&mut self, msg: Message) {
+        match msg {
+            Message::Monitor((name, service)) => self.monitor(name, service),
+            _ => println!("Unhandled message {:?}", msg),
+        }
+    }
+
+    pub fn run(mut self) -> (Handle, impl Future<Item = (), Error = ()>) {
         println!("running manager");
 
         let rx = match self.rx.take() {
@@ -71,19 +115,46 @@ impl Manager {
             None => panic!("manager is already running"),
         };
 
-        self.keep_alive();
+        //self.keep_alive();
+        let tx = self.tx.clone();
 
-        rx.for_each(|msg| {
-            println!("Message: {:?}", msg);
-            Ok(())
-        })
-        .map_err(|e| {
-            println!("error: {}", e);
-            ()
-        })
+        let future = rx
+            .for_each(move |msg| {
+                println!("got message {:?}", msg);
+                self.process(msg);
+                //println!("message");
+                Ok(())
+            })
+            //.map(|_| println!("exit loop"))
+            .map_err(|e| {
+                println!("error: {}", e);
+                ()
+            });
+
+        return (Handle { tx }, future);
     }
 }
 
+fn exec(tx: Sender, cmd: String) -> Result<(), Error> {
+    let child = Command::new("echo")
+        .arg("hello")
+        .arg("world")
+        .spawn_async()?;
+
+    let future = child
+        .map(move |status| {
+            println!("exit status {}", status);
+            tx.send(Message::Exit).and_then(|tx| tx.flush())
+        })
+        .map(|tx| println!("transmitted"))
+        .map_err(|e| {
+            println!("failed to wait for exit status: {}", e);
+        });
+
+    tokio::spawn(future);
+
+    Ok(())
+}
 struct Oneshot {
     tx: mpsc::Sender<Message>,
 }
