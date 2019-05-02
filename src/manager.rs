@@ -23,7 +23,7 @@ impl Process {
     }
 }
 /// Service state
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum State {
     /// service is scheduled for execution
     Scheduled,
@@ -193,6 +193,13 @@ impl Manager {
         let tx = self.tx.clone();
         let tester = Self::tester(process.config.test.clone())
             .then(|result| {
+                // the tester is the only entity that can change service
+                // state to Running, or TestError
+                // it means that we can safely assume the Running
+                // or TestError state can only be set if the service
+                // current state is set to `spawned`. This way we can avoid
+                // state race conditions (for example if the service
+                // exited before the test.
                 let state = match result {
                     Ok(_) => State::Running,
                     Err(_) => State::TestError,
@@ -225,6 +232,16 @@ impl Manager {
             None => return,
         };
 
+        // as explained before a service state can be only set
+        // to running or test-error if the service state is
+        // set to spawned. this is to avoid race conditions
+        // in case the service itself changed state to success
+        // or error (only possible from a one-shot service)
+        let state = match state {
+            State::Running | State::TestError if process.state != State::Spawned => return,
+            _ => state,
+        };
+
         process.state = state;
     }
 
@@ -235,13 +252,23 @@ impl Manager {
             None => return,
         };
 
-        process.state = if status.success() {
-            State::Success
-        } else {
-            State::Error(status)
-        };
-
         if process.config.one_shot {
+            // OneShot service is the only one that can
+            // be set to either success or error.
+            // the reason that we do it async is that we
+            // can have a single entry point for service
+            // status update, so it's either to add hooks
+            // to the state change event.
+            let state = match status.success() {
+                true => State::Success,
+                false => State::Error(status),
+            };
+            let tx = self.tx.clone();
+            tokio::spawn(
+                tx.send(Message::State(name.clone(), state))
+                    .map(|_| ())
+                    .map_err(|_| ()),
+            );
             return;
         }
 
