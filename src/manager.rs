@@ -1,4 +1,3 @@
-use failure::Error;
 use futures::lazy;
 use std::collections::HashMap;
 use std::process::{Command, ExitStatus};
@@ -180,8 +179,6 @@ impl Manager {
         let child = Self::child(process.config.exec.clone());
 
         process.state = State::Spawned;
-        //TODO: for long running services the `test` command line
-        //must be executed after spawning the child
         let tx = self.tx.clone();
 
         let service = name.clone();
@@ -265,7 +262,6 @@ impl Manager {
 
     /// set service state
     fn state(&mut self, name: String, state: State) {
-        //TODO: add reason of failure
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => return,
