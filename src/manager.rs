@@ -124,7 +124,9 @@ impl Manager {
     }
 
     /// tester will create a tester future that tries to run the given command 5 times
-    /// with delays 250 ms in between.
+    /// with delays 250*trial number ms in between.
+    /// so the delay is 0 250 500 750 1000 1250 for a total delay of 3750 ms before
+    /// the service is set to "test failed" state.
     fn tester(cmd: String) -> impl Future<Item = (), Error = ()> {
         use std::time::{Duration, Instant};
         if cmd.is_empty() {
@@ -132,10 +134,10 @@ impl Manager {
         }
 
         let tester = stream::iter_ok(0..5) //try 5 times (configurable ?)
-            .for_each(move |_| {
+            .for_each(move |i| {
                 let cmd = cmd.clone();
                 // wait 250 ms between trials (configurable ?)
-                let deadline = Instant::now() + Duration::from_millis(250);
+                let deadline = Instant::now() + Duration::from_millis(i * 250);
                 timer::Delay::new(deadline)
                     .then(move |_| Self::child(cmd))
                     .then(|exit| {
