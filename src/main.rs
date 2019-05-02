@@ -24,7 +24,8 @@ fn main() {
         handle.monitor(
             "test".to_string(),
             settings::Service {
-                exec: "date".to_string(),
+                exec: String::from("date"),
+                test: String::from(""),
                 one_shot: false,
                 after: vec![],
             },

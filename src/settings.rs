@@ -18,21 +18,25 @@ pub type Services = HashMap<String, Service>;
 #[serde(default)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Service {
+    /// command to run
     pub exec: String,
+    /// test command (optional)
+    #[serde(default)]
+    pub test: String,
     #[serde(rename = "oneshot")]
     pub one_shot: bool,
     pub after: Vec<String>,
 }
 
-impl Clone for Service {
-    fn clone(&self) -> Self {
-        return Service {
-            exec: self.exec.clone(),
-            one_shot: self.one_shot,
-            after: self.after.clone(),
-        };
-    }
-}
+// impl Clone for Service {
+//     fn clone(&self) -> Self {
+//         return Service {
+//             exec: self.exec.clone(),
+//             one_shot: self.one_shot,
+//             after: self.after.clone(),
+//         };
+//     }
+// }
 
 /// load loads a single file
 pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
