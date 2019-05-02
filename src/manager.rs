@@ -27,13 +27,19 @@ impl Process {
 enum State {
     /// service is scheduled for execution
     Scheduled,
-    /// service has been started, it didn't exit yet (or status wasn't checked until this moment)
+    /// service has been started, but it didn't exit yet, or we didn't run the test command.
+    Spawned,
+    /// service has been started, and test command passed.
     Running,
     /// service has exited with success state, only one-shot can stay in this state
     Success,
     /// service exited with this error
     Error(ExitStatus),
-    /// failed to spawn the process (todo: add more info)
+    /// the service test command failed, this might (or might not) be replaced
+    /// with an Error state later on once the service process itself exits
+    TestError,
+    /// Failure means the service has failed to spawn in a way that retyring
+    /// won't help, like command line parsing error or failed to fork
     Failure,
 }
 
@@ -47,10 +53,8 @@ enum Message {
     /// either to re-spawn or exit based on the service configuration provided
     /// by the monitor message
     Exit(String, ExitStatus),
-    /// Failure means the service has failed to spawn in a way that won't
-    /// be fixed by retrying (command line parsing error), or failure on
-    /// exec (fork)
-    Failure(String),
+    /// State message sets the service state to the given value
+    State(String, State),
     /// ReSpawn a service after exit
     ReSpawn(String),
 }
@@ -93,8 +97,8 @@ impl Manager {
     }
 
     /// creates a child process future
-    fn child(cmd: &str) -> impl Future<Item = ExitStatus, Error = std::io::Error> {
-        let args = match shlex::split(cmd) {
+    fn child(cmd: String) -> impl Future<Item = ExitStatus, Error = std::io::Error> {
+        let args = match shlex::split(&cmd) {
             Some(args) => args,
             _ => {
                 return future::Either::B(future::err(std::io::Error::new(
@@ -119,25 +123,87 @@ impl Manager {
         future::Either::A(child)
     }
 
+    /// tester will create a tester future that tries to run the given command 5 times
+    /// with delays 250 ms in between.
+    fn tester(cmd: String) -> impl Future<Item = (), Error = ()> {
+        use std::time::{Duration, Instant};
+        if cmd.is_empty() {
+            return future::Either::A(future::ok(()));
+        }
+
+        let tester = stream::iter_ok(0..5) //try 5 times (configurable ?)
+            .for_each(move |_| {
+                let cmd = cmd.clone();
+                // wait 250 ms between trials (configurable ?)
+                let deadline = Instant::now() + Duration::from_millis(250);
+                timer::Delay::new(deadline)
+                    .then(move |_| Self::child(cmd))
+                    .then(|exit| {
+                        if match exit {
+                            Ok(status) => status.success(),
+                            Err(_) => false,
+                        } {
+                            // On test command success we return an error
+                            // to stop the foreach loop.
+                            return Err(()); //break the loop
+                        }
+
+                        // returning an OK will continue the loop
+                        // which means try again, so we return this
+                        // if the test command fails!
+                        Ok(())
+                    })
+            })
+            // this confusing block will flip the result of this
+            // future ok => err and err => ok the reason we do
+            // this we want this future to return OK when the
+            // test cmd success. But we actually break the loop with Err
+            // if the future run to success it means we reached the end of the
+            // loop without the test command runs to success, we need to convert
+            // Ok to error to donate failure of test.
+            .then(|r| match r {
+                Ok(_) => Err(()),
+                Err(_) => Ok(()),
+            });
+
+        future::Either::B(tester)
+    }
+
     /// exec a service given the name
     fn exec(&mut self, name: String) {
         let mut process = self.processes.get_mut(&name).unwrap();
-        let child = Self::child(&process.config.exec);
+        let child = Self::child(process.config.exec.clone());
 
-        process.state = State::Running;
+        process.state = State::Spawned;
         //TODO: for long running services the `test` command line
         //must be executed after spawning the child
         let tx = self.tx.clone();
 
-        let future = child
+        let service = name.clone();
+        let child = child
             .then(move |result| match result {
-                Ok(status) => tx.send(Message::Exit(name, status)),
-                Err(_) => tx.send(Message::Failure(name)),
+                Ok(status) => tx.send(Message::Exit(service, status)),
+                Err(_) => tx.send(Message::State(service, State::Failure)),
             })
             .map(|_| ())
             .map_err(|_| ());
 
-        tokio::spawn(future);
+        tokio::spawn(child);
+
+        let tx = self.tx.clone();
+        let tester = Self::tester(process.config.test.clone())
+            .then(|result| {
+                let state = match result {
+                    Ok(_) => State::Running,
+                    Err(_) => State::TestError,
+                };
+
+                tx.send(Message::State(name, state))
+            })
+            .map(|_| ())
+            .map_err(|_| ());
+
+        tokio::spawn(tester);
     }
 
     /// handle the monitor message
@@ -151,16 +217,15 @@ impl Manager {
         self.exec(name);
     }
 
-    /// handle failure message
-    fn failure(&mut self, name: String) {
+    /// set service state
+    fn state(&mut self, name: String, state: State) {
         //TODO: add reason of failure
-        println!("process {} failed", name);
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => return,
         };
 
-        process.state = State::Failure;
+        process.state = state;
     }
 
     /// handle process exit
@@ -197,8 +262,8 @@ impl Manager {
         match msg {
             Message::Monitor(name, service) => self.monitor(name, service),
             Message::Exit(name, status) => self.exit(name, status),
-            Message::Failure(name) => self.failure(name),
             Message::ReSpawn(name) => self.re_spawn(name),
+            Message::State(name, state) => self.state(name, state),
             //_ => println!("Unhandled message {:?}", msg),
         }
     }

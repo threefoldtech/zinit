@@ -24,8 +24,8 @@ fn main() {
         handle.monitor(
             "test".to_string(),
             settings::Service {
-                exec: String::from("date"),
-                test: String::from(""),
+                exec: String::from("bash -c 'sleep 0.5s; redis-server'"),
+                test: String::from("redis-cli ping"),
                 one_shot: false,
                 after: vec![],
             },
