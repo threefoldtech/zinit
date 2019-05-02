@@ -15,16 +15,19 @@ struct Process {
 }
 
 impl Process {
-    fn new(service: Service) -> Process {
-        return Process {
-            state: State::Scheduled,
+    fn new(service: Service, state: State) -> Process {
+        Process {
+            state: state,
             config: service,
-        };
+        }
     }
 }
 /// Service state
 #[derive(Debug, PartialEq)]
 enum State {
+    /// Blocked means one or more dependencies hasn't been met yet. Service can stay in
+    /// this state as long as at least one dependency is not in either Running, or Success
+    Blocked,
     /// service is scheduled for execution
     Scheduled,
     /// service has been started, but it didn't exit yet, or we didn't run the test command.
@@ -33,7 +36,7 @@ enum State {
     Running,
     /// service has exited with success state, only one-shot can stay in this state
     Success,
-    /// service exited with this error
+    /// service exited with this error, only one-shot can stay in this state
     Error(ExitStatus),
     /// the service test command failed, this might (or might not) be replaced
     /// with an Error state later on once the service process itself exits
@@ -215,10 +218,44 @@ impl Manager {
         tokio::spawn(tester);
     }
 
+    fn can_schedule(&self, service: &Service) -> bool {
+        let mut can = true;
+        for dep in service.after.iter() {
+            can = match self.processes.get(dep) {
+                Some(ps) => match ps.state {
+                    State::Running | State::Success => true,
+                    _ => false,
+                },
+                //depending on an undefined service. This still can be resolved later
+                //by monitoring the dependency in the future.
+                None => false,
+            };
+
+            // if state is blocked, we can break the loop
+            if !can {
+                break;
+            }
+        }
+
+        can
+    }
+
     /// handle the monitor message
     fn monitor(&mut self, name: String, service: Service) {
-        self.processes.insert(name.clone(), Process::new(service));
-        self.exec(name);
+        let can_schedule = self.can_schedule(&service);
+
+        let state = match can_schedule {
+            true => State::Scheduled,
+            false => State::Blocked,
+        };
+
+        self.processes
+            .insert(name.clone(), Process::new(service, state));
+
+        // we can start this service immediately
+        if can_schedule {
+            self.exec(name);
+        }
     }
 
     /// handle the re-spawn message
@@ -244,7 +281,29 @@ impl Manager {
             _ => state,
         };
 
+        // set process state
         process.state = state;
+
+        // take an action based on the service state.
+        match process.state {
+            State::Running | State::Success => self.unblock(),
+            _ => {}
+        };
+    }
+
+    /// unblock scans the full list of services to find any blocked
+    /// service that can be unblocked and schedule it.
+    fn unblock(&mut self) {
+        let mut to_schedule = vec![];
+        for (name, ps) in self.processes.iter() {
+            if ps.state == State::Blocked && self.can_schedule(&ps.config) {
+                to_schedule.push(name.clone());
+            }
+        }
+
+        for name in to_schedule {
+            self.exec(name);
+        }
     }
 
     /// handle process exit

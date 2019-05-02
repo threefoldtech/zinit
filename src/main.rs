@@ -21,12 +21,47 @@ fn main() {
         // `monitor` which spawns a new task on the process
         // manager given the configuration
         let handle = manager.run();
+
+        // example long running service with test
+        // handle.monitor(
+        //     "test".to_string(),
+        //     settings::Service {
+        //         exec: String::from("bash -c 'sleep 0.5s; redis-server'"),
+        //         test: String::from("redis-cli ping"),
+        //         one_shot: false,
+        //         after: vec![],
+        //     },
+        // );
+
+        // example service with dependencies
+        // the 3 together will print `hello world\n`
+
         handle.monitor(
-            "test".to_string(),
+            "third".to_string(),
             settings::Service {
-                exec: String::from("bash -c 'sleep 0.5s; redis-server'"),
-                test: String::from("redis-cli ping"),
-                one_shot: false,
+                exec: String::from("echo"),
+                test: String::from(""),
+                one_shot: true,
+                after: vec![String::from("first"), String::from("second")],
+            },
+        );
+
+        handle.monitor(
+            "second".to_string(),
+            settings::Service {
+                exec: String::from("echo -n world"),
+                test: String::from(""),
+                one_shot: true,
+                after: vec![String::from("first")],
+            },
+        );
+
+        handle.monitor(
+            "first".to_string(),
+            settings::Service {
+                exec: String::from("echo -n 'hello '"),
+                test: String::from(""),
+                one_shot: true,
                 after: vec![],
             },
         );
