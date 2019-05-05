@@ -1,4 +1,4 @@
-> Work in progress 
+> Work in progress
 this repository is heavly under development and is still not usable at the moment. We still trying to figure out the basic optimum structure for the process manager
 
 # zinit
@@ -10,3 +10,6 @@ A PID replacement that is very lightweight and provide the following requirement
 - Support service dependencies during the boot process
 - Provide a simple command line interface to add, start, stop and reload services
 
+## Test docker image
+To play with zinit, we have a testing docker image you can build easily by typing `make docker`.
+The test image currently auto starts redis and open-sshd, it doesn't create key or change passwords (please check [Dockerfile](Dockerfile)).
