@@ -332,7 +332,7 @@ impl Manager {
         use std::time::{Duration, Instant};
 
         let tx = self.tx.clone();
-        let now = Instant::now() + Duration::from_secs(2);
+        let now = Instant::now() + Duration::from_secs(1);
         let f = timer::Delay::new(now)
             .map_err(|_| panic!("timer failed"))
             .and_then(move |_| tx.send(Message::ReSpawn(name)))
