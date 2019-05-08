@@ -6,7 +6,7 @@
 # was more services
 
 FROM ubuntu:bionic
-COPY zinit /sbin/
+
 RUN apt-get update
 RUN apt-get install -y redis openssh-server
 RUN apt-get clean
@@ -19,4 +19,6 @@ RUN echo "exec: redis-server\ntest: redis-cli ping" > /etc/zinit/redis.yaml
 RUN echo "exec: mkdir -p /run/sshd" > /etc/zinit/sshd-setup.yaml
 RUN echo "exec: /usr/sbin/sshd -D\nafter:\n  - sshd-setup" > /etc/zinit/sshd.yaml
 
-ENTRYPOINT /sbin/zinit init
+COPY zinit /sbin/
+
+ENTRYPOINT ["/sbin/zinit", "init"]

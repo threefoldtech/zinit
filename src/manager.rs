@@ -1,14 +1,16 @@
+use failure::Error;
 use futures::lazy;
 use std::collections::HashMap;
 use std::process::{Command, ExitStatus};
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
-use tokio_process::CommandExt;
+use tokio_process::{Child, CommandExt};
 
 use crate::settings::Service;
 
 struct Process {
+    pid: u32,
     state: State,
     config: Service,
 }
@@ -16,6 +18,7 @@ struct Process {
 impl Process {
     fn new(service: Service, state: State) -> Process {
         Process {
+            pid: 0,
             state: state,
             config: service,
         }
@@ -50,6 +53,8 @@ enum State {
 enum Message {
     /// Monitor, starts a new service and monitor it
     Monitor(String, Service),
+    /// set service pid
+    PID(String, u32),
     /// Exit, notify the manager that a service has exited with the given
     /// exit status. Once the manager receives this message, it decides
     /// either to re-spawn or exit based on the service configuration provided
@@ -99,30 +104,17 @@ impl Manager {
     }
 
     /// creates a child process future
-    fn child(cmd: String) -> impl Future<Item = ExitStatus, Error = std::io::Error> {
+    fn child(cmd: String) -> Result<Child, Error> {
         let args = match shlex::split(&cmd) {
             Some(args) => args,
-            _ => {
-                return future::Either::B(future::err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "invalid command line",
-                )))
-            }
+            _ => bail!("invalid command line"),
         };
 
         if args.len() < 1 {
-            return future::Either::B(future::err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "invalid command line",
-            )));
+            bail!("invalid command line");
         }
 
-        let child = match Command::new(&args[0]).args(&args[1..]).spawn_async() {
-            Ok(child) => child,
-            Err(err) => return future::Either::B(future::err(err)),
-        };
-
-        future::Either::A(child)
+        Ok(Command::new(&args[0]).args(&args[1..]).spawn_async()?)
     }
 
     /// tester will create a tester future that tries to run the given command 5 times
@@ -142,6 +134,7 @@ impl Manager {
                 let deadline = Instant::now() + Duration::from_millis(i * 250);
                 timer::Delay::new(deadline)
                     .then(move |_| Self::child(cmd))
+                    .and_then(|child| child.map_err(|e| format_err!("{}", e)))
                     .then(|exit| {
                         if match exit {
                             Ok(status) => status.success(),
@@ -176,19 +169,44 @@ impl Manager {
     /// exec a service given the name
     fn exec(&mut self, name: String) {
         let mut process = self.processes.get_mut(&name).unwrap();
-        let child = Self::child(process.config.exec.clone());
 
-        process.state = State::Spawned;
         let tx = self.tx.clone();
+        process.state = State::Spawned;
+        let service = name.clone();
+        let child = match Self::child(process.config.exec.clone()) {
+            Ok(child) => tx
+                .send(Message::PID(service, child.id())) // update process table with process pid
+                .map_err(|e| format_err!("{}", e))
+                .and_then(|tx| {
+                    // then we execute the child
+                    child
+                        .map(|status| (tx, status)) // wrap the tx and the status into single value
+                        .map_err(|e| format_err!("{}", e))
+                }),
+            Err(_) => {
+                // failed to spawn child, this is probably an
+                // un-fixable error. we set status to failure and exit
+                // todo: add error to the failure
+                tokio::spawn(
+                    tx.send(Message::State(service, State::Failure))
+                        .map(|_| ())
+                        .map_err(|_| ()),
+                );
+                return;
+            }
+        };
 
         let service = name.clone();
         let child = child
-            .then(move |result| match result {
-                Ok(status) => tx.send(Message::Exit(service, status)),
-                Err(_) => tx.send(Message::State(service, State::Failure)),
+            .and_then(|(tx, status)| {
+                // once child exits, we send the status to process table
+                tx.send(Message::Exit(service, status))
+                    .map_err(|e| format_err!("{}", e))
             })
             .map(|_| ())
-            .map_err(|_| ());
+            .map_err(|e| {
+                println!("failed exec process: {}", e);
+            });
 
         tokio::spawn(child);
 
@@ -261,6 +279,16 @@ impl Manager {
     }
 
     /// set service state
+    fn pid(&mut self, name: String, pid: u32) {
+        let process = match self.processes.get_mut(&name) {
+            Some(process) => process,
+            None => return,
+        };
+
+        process.pid = pid;
+    }
+
+    /// set service state
     fn state(&mut self, name: String, state: State) {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
@@ -309,6 +337,7 @@ impl Manager {
             None => return,
         };
 
+        process.pid = 0;
         if process.config.one_shot {
             // OneShot service is the only one that can
             // be set to either success or error.
@@ -348,6 +377,7 @@ impl Manager {
             Message::Exit(name, status) => self.exit(name, status),
             Message::ReSpawn(name) => self.re_spawn(name),
             Message::State(name, state) => self.state(name, state),
+            Message::PID(name, pid) => self.pid(name, pid),
             //_ => println!("Unhandled message {:?}", msg),
         }
     }
