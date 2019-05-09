@@ -44,11 +44,23 @@ impl Table {
         }
     }
 
-    fn try_wait_process() -> Result<wait::WaitStatus> {
-        Ok(wait::waitpid(
-            Option::None,
-            Some(wait::WaitPidFlag::WNOHANG),
-        )?)
+    fn try_wait_process() -> Vec<WaitStatus> {
+        let mut statuses: Vec<WaitStatus> = Vec::new();
+        loop {
+            let status = match wait::waitpid(Option::None, Some(wait::WaitPidFlag::WNOHANG)) {
+                Ok(status) => status,
+                Err(_) => {
+                    return statuses;
+                }
+            };
+
+            match status {
+                WaitStatus::StillAlive => break,
+                _ => statuses.push(status),
+            }
+        }
+
+        statuses
     }
 
     pub fn cmd(
@@ -85,32 +97,29 @@ impl Table {
         let ps = Arc::clone(&self.ps);
 
         stream.map_err(|_| ()).for_each(move |_signal| {
-            let status = match Self::try_wait_process() {
-                Ok(status) => status,
-                Err(_) => {
-                    //TODO: signal channel broken! continue or break ?
-                    return Ok(());
-                }
-            };
+            let statuses = Self::try_wait_process();
 
-            let pid = match status.pid() {
-                Some(pid) => pid.as_raw() as u32,
-                None => {
-                    //no pid, it means no child has exited
-                    return Ok(()); //continue the loop
-                }
-            };
+            for status in statuses.into_iter() {
+                let pid = match status.pid() {
+                    Some(pid) => pid.as_raw() as u32,
+                    None => {
+                        //no pid, it means no child has exited
+                        continue; //continue the loop
+                    }
+                };
 
-            let mut ps = ps.lock().unwrap();
-            let sender = match ps.remove(&pid) {
-                Some(sender) => sender,
-                None => {
-                    //not registered pid
-                    return Ok(());
-                }
-            };
+                let mut ps = ps.lock().unwrap();
+                let sender = match ps.remove(&pid) {
+                    Some(sender) => sender,
+                    None => continue,
+                };
+                match sender.send(status) {
+                    Ok(_) => (),
+                    Err(e) => println!("failed to notify child of pid '{}': {:?}", pid, e),
+                };
+            }
 
-            sender.send(status).map_err(|_| ())
+            Ok(())
         })
     }
 }
