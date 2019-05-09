@@ -30,16 +30,18 @@ const SIGCHLD: i32 = 17;
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// implementation for a process table
-/// once a command is started on the process table, it
-/// return a future that is complete when the process exits
-struct Table {
+/// the process manager maintains a list or running processes
+/// it also take care of reading exit status of processes when
+/// they exit, by waiting on the SIGCHLD signal, and then make sure
+/// to wake up the command future.
+/// this allow us also to do orphan reaping for free.
+struct ProcessManager {
     ps: Arc<Mutex<HashMap<u32, Sender<WaitStatus>>>>,
 }
 
-impl Table {
-    pub fn new() -> Table {
-        Table {
+impl ProcessManager {
+    pub fn new() -> ProcessManager {
+        ProcessManager {
             ps: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -63,20 +65,24 @@ impl Table {
         statuses
     }
 
+    /// creates a child process future from Command
     pub fn cmd(
         &mut self,
         cmd: &mut Command,
-    ) -> Result<impl Future<Item = WaitStatus, Error = Error>> {
+    ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
         let child = cmd.spawn()?;
         let (sender, receiver) = oneshot::channel::<WaitStatus>();
 
         self.ps.lock().unwrap().insert(child.id(), sender);
 
-        Ok(receiver.map_err(|e| format_err!("{}", e)))
+        Ok((child.id(), receiver.map_err(|e| format_err!("{}", e))))
     }
 
-    /// creates a child process future
-    pub fn child(&mut self, cmd: String) -> Result<impl Future<Item = WaitStatus, Error = Error>> {
+    /// creates a child process future from command line
+    pub fn child(
+        &mut self,
+        cmd: String,
+    ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
         let args = match shlex::split(&cmd) {
             Some(args) => args,
             _ => bail!("invalid command line"),
@@ -92,6 +98,8 @@ impl Table {
         self.cmd(cmd)
     }
 
+    /// return the process manager future. it's up to the
+    /// caller responsibility to make sure it is spawned
     pub fn run(&self) -> impl Future<Item = (), Error = ()> {
         let stream = Signal::new(SIGCHLD).flatten_stream();
         let ps = Arc::clone(&self.ps);
@@ -124,6 +132,8 @@ impl Table {
     }
 }
 
+/// Process is a representation of a scheduled/running
+/// service
 struct Process {
     pid: u32,
     state: State,
@@ -168,8 +178,6 @@ enum State {
 enum Message {
     /// Monitor, starts a new service and monitor it
     Monitor(String, Service),
-    /// set service pid
-    PID(String, u32),
     /// Exit, notify the manager that a service has exited with the given
     /// exit status. Once the manager receives this message, it decides
     /// either to re-spawn or exit based on the service configuration provided
@@ -201,7 +209,7 @@ type UBSender = mpsc::UnboundedSender<Message>;
 /// Manager is the main entry point, it keeps track of the
 /// processes state, and spawn them based on the dependencies.
 pub struct Manager {
-    table: Arc<Mutex<Table>>,
+    table: Arc<Mutex<ProcessManager>>,
     processes: HashMap<String, Process>,
     tx: UBSender,
     rx: Option<mpsc::UnboundedReceiver<Message>>,
@@ -213,7 +221,7 @@ impl Manager {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
-            table: Arc::new(Mutex::new(Table::new())),
+            table: Arc::new(Mutex::new(ProcessManager::new())),
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),
@@ -240,7 +248,7 @@ impl Manager {
                 timer::Delay::new(deadline)
                     .map_err(|e| format_err!("{}", e))
                     .and_then(move |_| match table.lock().unwrap().child(cmd) {
-                        Ok(child) => future::Either::A(child),
+                        Ok((_, child)) => future::Either::A(child),
                         Err(err) => future::Either::B(future::err(err)),
                     })
                     .then(|exit| {
@@ -286,8 +294,12 @@ impl Manager {
 
         let service = name.clone();
         let child = match self.table.lock().unwrap().child(exec) {
-            // we need to update the process id here
-            Ok(child) => child,
+            Ok((pid, child)) => {
+                // update the process pid
+                let mut process = self.processes.get_mut(&name).unwrap();
+                process.pid = pid;
+                child
+            }
             Err(_) => {
                 // failed to spawn child, this is probably an
                 // un-fixable error. we set status to failure and exit
@@ -385,16 +397,6 @@ impl Manager {
     }
 
     /// set service state
-    fn pid(&mut self, name: String, pid: u32) {
-        let process = match self.processes.get_mut(&name) {
-            Some(process) => process,
-            None => return,
-        };
-
-        process.pid = pid;
-    }
-
-    /// set service state
     fn state(&mut self, name: String, state: State) {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
@@ -483,7 +485,6 @@ impl Manager {
             Message::Exit(name, status) => self.exit(name, status),
             Message::ReSpawn(name) => self.re_spawn(name),
             Message::State(name, state) => self.state(name, state),
-            Message::PID(name, pid) => self.pid(name, pid),
             //_ => println!("Unhandled message {:?}", msg),
         }
     }
