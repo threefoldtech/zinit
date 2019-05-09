@@ -1,13 +1,119 @@
 use failure::Error;
+use futures;
 use futures::lazy;
+use nix::sys::wait::{self, WaitStatus};
 use std::collections::HashMap;
-use std::process::{Command, ExitStatus};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot::{self, Sender};
 use tokio::timer;
-use tokio_process::{Child, CommandExt};
+use tokio_signal::unix::Signal;
 
 use crate::settings::Service;
+
+trait WaitStatusExt {
+    fn success(&self) -> bool;
+}
+
+impl WaitStatusExt for WaitStatus {
+    fn success(&self) -> bool {
+        match *self {
+            WaitStatus::Exited(_, code) if code == 0 => true,
+            _ => false,
+        }
+    }
+}
+
+const SIGCHLD: i32 = 17;
+
+type Result<T> = std::result::Result<T, Error>;
+
+/// implementation for a process table
+/// once a command is started on the process table, it
+/// return a future that is complete when the process exits
+struct Table {
+    ps: Arc<Mutex<HashMap<u32, Sender<WaitStatus>>>>,
+}
+
+impl Table {
+    pub fn new() -> Table {
+        Table {
+            ps: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn try_wait_process() -> Result<wait::WaitStatus> {
+        Ok(wait::waitpid(
+            Option::None,
+            Some(wait::WaitPidFlag::WNOHANG),
+        )?)
+    }
+
+    pub fn cmd(
+        &mut self,
+        cmd: &mut Command,
+    ) -> Result<impl Future<Item = WaitStatus, Error = Error>> {
+        let child = cmd.spawn()?;
+        let (sender, receiver) = oneshot::channel::<WaitStatus>();
+
+        self.ps.lock().unwrap().insert(child.id(), sender);
+
+        Ok(receiver.map_err(|e| format_err!("{}", e)))
+    }
+
+    /// creates a child process future
+    pub fn child(&mut self, cmd: String) -> Result<impl Future<Item = WaitStatus, Error = Error>> {
+        let args = match shlex::split(&cmd) {
+            Some(args) => args,
+            _ => bail!("invalid command line"),
+        };
+
+        if args.len() < 1 {
+            bail!("invalid command line");
+        }
+
+        let mut cmd = Command::new(&args[0]);
+        let cmd = cmd.args(&args[1..]);
+
+        self.cmd(cmd)
+    }
+
+    pub fn run(&self) -> impl Future<Item = (), Error = ()> {
+        let stream = Signal::new(SIGCHLD).flatten_stream();
+        let ps = Arc::clone(&self.ps);
+
+        stream.map_err(|_| ()).for_each(move |_signal| {
+            let status = match Self::try_wait_process() {
+                Ok(status) => status,
+                Err(_) => {
+                    //TODO: signal channel broken! continue or break ?
+                    return Ok(());
+                }
+            };
+
+            let pid = match status.pid() {
+                Some(pid) => pid.as_raw() as u32,
+                None => {
+                    //no pid, it means no child has exited
+                    return Ok(()); //continue the loop
+                }
+            };
+
+            let mut ps = ps.lock().unwrap();
+            let sender = match ps.remove(&pid) {
+                Some(sender) => sender,
+                None => {
+                    //not registered pid
+                    return Ok(());
+                }
+            };
+
+            sender.send(status).map_err(|_| ())
+        })
+    }
+}
 
 struct Process {
     pid: u32,
@@ -39,7 +145,7 @@ enum State {
     /// service has exited with success state, only one-shot can stay in this state
     Success,
     /// service exited with this error, only one-shot can stay in this state
-    Error(ExitStatus),
+    Error(WaitStatus),
     /// the service test command failed, this might (or might not) be replaced
     /// with an Error state later on once the service process itself exits
     TestError,
@@ -59,7 +165,7 @@ enum Message {
     /// exit status. Once the manager receives this message, it decides
     /// either to re-spawn or exit based on the service configuration provided
     /// by the monitor message
-    Exit(String, ExitStatus),
+    Exit(String, WaitStatus),
     /// State message sets the service state to the given value
     State(String, State),
     /// ReSpawn a service after exit
@@ -67,7 +173,7 @@ enum Message {
 }
 
 pub struct Handle {
-    tx: Sender,
+    tx: UBSender,
 }
 
 impl Handle {
@@ -81,13 +187,14 @@ impl Handle {
     }
 }
 
-type Sender = mpsc::UnboundedSender<Message>;
+type UBSender = mpsc::UnboundedSender<Message>;
 
 /// Manager is the main entry point, it keeps track of the
 /// processes state, and spawn them based on the dependencies.
 pub struct Manager {
+    table: Arc<Mutex<Table>>,
     processes: HashMap<String, Process>,
-    tx: Sender,
+    tx: UBSender,
     rx: Option<mpsc::UnboundedReceiver<Message>>,
 }
 
@@ -97,44 +204,36 @@ impl Manager {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
+            table: Arc::new(Mutex::new(Table::new())),
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),
         }
     }
 
-    /// creates a child process future
-    fn child(cmd: String) -> Result<Child, Error> {
-        let args = match shlex::split(&cmd) {
-            Some(args) => args,
-            _ => bail!("invalid command line"),
-        };
-
-        if args.len() < 1 {
-            bail!("invalid command line");
-        }
-
-        Ok(Command::new(&args[0]).args(&args[1..]).spawn_async()?)
-    }
-
     /// tester will create a tester future that tries to run the given command 5 times
     /// with delays 250*trial number ms in between.
     /// so the delay is 0 250 500 750 1000 1250 for a total delay of 3750 ms before
     /// the service is set to "test failed" state.
-    fn tester(cmd: String) -> impl Future<Item = (), Error = ()> {
+    fn tester(&mut self, cmd: String) -> impl Future<Item = (), Error = ()> {
         use std::time::{Duration, Instant};
         if cmd.is_empty() {
             return future::Either::A(future::ok(()));
         }
 
+        let table = Arc::clone(&self.table);
         let tester = stream::iter_ok(0..5) //try 5 times (configurable ?)
             .for_each(move |i| {
                 let cmd = cmd.clone();
+                let table = Arc::clone(&table);
                 // wait 250 ms between trials (configurable ?)
                 let deadline = Instant::now() + Duration::from_millis(i * 250);
                 timer::Delay::new(deadline)
-                    .then(move |_| Self::child(cmd))
-                    .and_then(|child| child.map_err(|e| format_err!("{}", e)))
+                    .map_err(|e| format_err!("{}", e))
+                    .and_then(move |_| match table.lock().unwrap().child(cmd) {
+                        Ok(child) => future::Either::A(child),
+                        Err(err) => future::Either::B(future::err(err)),
+                    })
                     .then(|exit| {
                         if match exit {
                             Ok(status) => status.success(),
@@ -172,17 +271,14 @@ impl Manager {
 
         let tx = self.tx.clone();
         process.state = State::Spawned;
+        let exec = process.config.exec.clone();
+        let test = process.config.test.clone();
+        drop(process);
+
         let service = name.clone();
-        let child = match Self::child(process.config.exec.clone()) {
-            Ok(child) => tx
-                .send(Message::PID(service, child.id())) // update process table with process pid
-                .map_err(|e| format_err!("{}", e))
-                .and_then(|tx| {
-                    // then we execute the child
-                    child
-                        .map(|status| (tx, status)) // wrap the tx and the status into single value
-                        .map_err(|e| format_err!("{}", e))
-                }),
+        let child = match self.table.lock().unwrap().child(exec) {
+            // we need to update the process id here
+            Ok(child) => child,
             Err(_) => {
                 // failed to spawn child, this is probably an
                 // un-fixable error. we set status to failure and exit
@@ -198,7 +294,7 @@ impl Manager {
 
         let service = name.clone();
         let child = child
-            .and_then(|(tx, status)| {
+            .and_then(move |status| {
                 // once child exits, we send the status to process table
                 tx.send(Message::Exit(service, status))
                     .map_err(|e| format_err!("{}", e))
@@ -211,7 +307,8 @@ impl Manager {
         tokio::spawn(child);
 
         let tx = self.tx.clone();
-        let tester = Self::tester(process.config.test.clone())
+        let tester = self
+            .tester(test)
             .then(|result| {
                 // the tester is the only entity that can change service
                 // state to Running, or TestError
@@ -331,7 +428,7 @@ impl Manager {
     }
 
     /// handle process exit
-    fn exit(&mut self, name: String, status: ExitStatus) {
+    fn exit(&mut self, name: String, status: WaitStatus) {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => return,
@@ -388,6 +485,9 @@ impl Manager {
             Some(rx) => rx,
             None => panic!("manager is already running"),
         };
+
+        //start the process table
+        tokio::spawn(self.table.lock().unwrap().run());
 
         let tx = self.tx.clone();
 
