@@ -98,7 +98,7 @@ type MessageSender = mpsc::UnboundedSender<Message>;
 /// Manager is the main entry point, it keeps track of the
 /// processes state, and spawn them based on the dependencies.
 pub struct Manager {
-    table: Arc<Mutex<pm::ProcessManager>>,
+    pm: Arc<Mutex<pm::ProcessManager>>,
     processes: HashMap<String, Process>,
     tx: MessageSender,
     rx: Option<mpsc::UnboundedReceiver<Message>>,
@@ -110,7 +110,7 @@ impl Manager {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
-            table: Arc::new(Mutex::new(pm::ProcessManager::new())),
+            pm: Arc::new(Mutex::new(pm::ProcessManager::new())),
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),
@@ -127,7 +127,7 @@ impl Manager {
             return future::Either::A(future::ok(()));
         }
 
-        let table = Arc::clone(&self.table);
+        let table = Arc::clone(&self.pm);
         let tester = stream::iter_ok(0..5) //try 5 times (configurable ?)
             .for_each(move |i| {
                 let cmd = cmd.clone();
@@ -182,7 +182,7 @@ impl Manager {
         drop(process);
 
         let service = name.clone();
-        let child = match self.table.lock().unwrap().child(exec) {
+        let child = match self.pm.lock().unwrap().child(exec) {
             Ok((pid, child)) => {
                 // update the process pid
                 let mut process = self.processes.get_mut(&name).unwrap();
@@ -394,7 +394,7 @@ impl Manager {
         };
 
         //start the process table
-        tokio::spawn(self.table.lock().unwrap().run());
+        tokio::spawn(self.pm.lock().unwrap().run());
 
         let tx = self.tx.clone();
 
