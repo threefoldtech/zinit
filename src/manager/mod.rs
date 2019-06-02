@@ -1,136 +1,16 @@
-use failure::Error;
 use futures;
 use futures::lazy;
-use nix::sys::wait::{self, WaitStatus};
+use nix::sys::wait::WaitStatus;
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot::{self, Sender};
 use tokio::timer;
-use tokio_signal::unix::Signal;
 
 use crate::settings::Service;
 
-trait WaitStatusExt {
-    fn success(&self) -> bool;
-}
-
-impl WaitStatusExt for WaitStatus {
-    fn success(&self) -> bool {
-        match *self {
-            WaitStatus::Exited(_, code) if code == 0 => true,
-            _ => false,
-        }
-    }
-}
-
-const SIGCHLD: i32 = 17;
-
-type Result<T> = std::result::Result<T, Error>;
-
-/// the process manager maintains a list or running processes
-/// it also take care of reading exit status of processes when
-/// they exit, by waiting on the SIGCHLD signal, and then make sure
-/// to wake up the command future.
-/// this allow us also to do orphan reaping for free.
-struct ProcessManager {
-    ps: Arc<Mutex<HashMap<u32, Sender<WaitStatus>>>>,
-}
-
-impl ProcessManager {
-    pub fn new() -> ProcessManager {
-        ProcessManager {
-            ps: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    fn try_wait_process() -> Vec<WaitStatus> {
-        let mut statuses: Vec<WaitStatus> = Vec::new();
-        loop {
-            let status = match wait::waitpid(Option::None, Some(wait::WaitPidFlag::WNOHANG)) {
-                Ok(status) => status,
-                Err(_) => {
-                    return statuses;
-                }
-            };
-
-            match status {
-                WaitStatus::StillAlive => break,
-                _ => statuses.push(status),
-            }
-        }
-
-        statuses
-    }
-
-    /// creates a child process future from Command
-    pub fn cmd(
-        &mut self,
-        cmd: &mut Command,
-    ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
-        let child = cmd.spawn()?;
-        let (sender, receiver) = oneshot::channel::<WaitStatus>();
-
-        self.ps.lock().unwrap().insert(child.id(), sender);
-
-        Ok((child.id(), receiver.map_err(|e| format_err!("{}", e))))
-    }
-
-    /// creates a child process future from command line
-    pub fn child(
-        &mut self,
-        cmd: String,
-    ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
-        let args = match shlex::split(&cmd) {
-            Some(args) => args,
-            _ => bail!("invalid command line"),
-        };
-
-        if args.len() < 1 {
-            bail!("invalid command line");
-        }
-
-        let mut cmd = Command::new(&args[0]);
-        let cmd = cmd.args(&args[1..]);
-
-        self.cmd(cmd)
-    }
-
-    /// return the process manager future. it's up to the
-    /// caller responsibility to make sure it is spawned
-    pub fn run(&self) -> impl Future<Item = (), Error = ()> {
-        let stream = Signal::new(SIGCHLD).flatten_stream();
-        let ps = Arc::clone(&self.ps);
-
-        stream.map_err(|_| ()).for_each(move |_signal| {
-            let statuses = Self::try_wait_process();
-
-            for status in statuses.into_iter() {
-                let pid = match status.pid() {
-                    Some(pid) => pid.as_raw() as u32,
-                    None => {
-                        //no pid, it means no child has exited
-                        continue; //continue the loop
-                    }
-                };
-
-                let mut ps = ps.lock().unwrap();
-                let sender = match ps.remove(&pid) {
-                    Some(sender) => sender,
-                    None => continue,
-                };
-                match sender.send(status) {
-                    Ok(_) => (),
-                    Err(e) => println!("failed to notify child of pid '{}': {:?}", pid, e),
-                };
-            }
-
-            Ok(())
-        })
-    }
-}
+mod pm;
+use pm::WaitStatusExt;
 
 /// Process is a representation of a scheduled/running
 /// service
@@ -173,11 +53,15 @@ enum State {
     Failure,
 }
 
+#[derive(Debug)]
+enum Action {
+    Monitor { name: String, service: Service },
+}
 /// Message defines the process manager internal messaging
 #[derive(Debug)]
 enum Message {
     /// Monitor, starts a new service and monitor it
-    Monitor(String, Service),
+    //Monitor(String, Service),
     /// Exit, notify the manager that a service has exited with the given
     /// exit status. Once the manager receives this message, it decides
     /// either to re-spawn or exit based on the service configuration provided
@@ -187,31 +71,36 @@ enum Message {
     State(String, State),
     /// ReSpawn a service after exit
     ReSpawn(String),
+
+    Action(Action),
 }
 
 pub struct Handle {
-    tx: UBSender,
+    tx: MessageSender,
 }
 
 impl Handle {
     pub fn monitor(&self, name: String, service: Service) {
         let tx = self.tx.clone();
         tokio::spawn(lazy(move || {
-            tx.send(Message::Monitor(name, service))
-                .map(|_| ())
-                .map_err(|_| ())
+            tx.send(Message::Action(Action::Monitor {
+                name: name,
+                service: service,
+            }))
+            .map(|_| ())
+            .map_err(|_| ())
         }));
     }
 }
 
-type UBSender = mpsc::UnboundedSender<Message>;
+type MessageSender = mpsc::UnboundedSender<Message>;
 
 /// Manager is the main entry point, it keeps track of the
 /// processes state, and spawn them based on the dependencies.
 pub struct Manager {
-    table: Arc<Mutex<ProcessManager>>,
+    table: Arc<Mutex<pm::ProcessManager>>,
     processes: HashMap<String, Process>,
-    tx: UBSender,
+    tx: MessageSender,
     rx: Option<mpsc::UnboundedReceiver<Message>>,
 }
 
@@ -221,7 +110,7 @@ impl Manager {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
-            table: Arc::new(Mutex::new(ProcessManager::new())),
+            table: Arc::new(Mutex::new(pm::ProcessManager::new())),
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),
@@ -478,13 +367,20 @@ impl Manager {
 
         tokio::spawn(f);
     }
+
+    fn action(&mut self, action: Action) {
+        match action {
+            Action::Monitor { name, service } => self.monitor(name, service),
+        }
+    }
+
     /// process different message types
     fn process(&mut self, msg: Message) {
         match msg {
-            Message::Monitor(name, service) => self.monitor(name, service),
             Message::Exit(name, status) => self.exit(name, status),
             Message::ReSpawn(name) => self.re_spawn(name),
             Message::State(name, state) => self.state(name, state),
+            Message::Action(action) => self.action(action),
             //_ => println!("Unhandled message {:?}", msg),
         }
     }
