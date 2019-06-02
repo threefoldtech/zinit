@@ -1,3 +1,4 @@
+use failure::Error;
 use futures;
 use futures::lazy;
 use nix::sys::wait::WaitStatus;
@@ -5,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::timer;
 
 use crate::settings::Service;
@@ -12,12 +14,17 @@ use crate::settings::Service;
 mod pm;
 use pm::WaitStatusExt;
 
+type Result<T> = std::result::Result<T, Error>;
+
 /// Process is a representation of a scheduled/running
 /// service
 struct Process {
     pid: u32,
     state: State,
+    // config is the service configuration
     config: Service,
+    // target is the target state of the service (up, down)
+    target: Target,
 }
 
 impl Process {
@@ -26,8 +33,14 @@ impl Process {
             pid: 0,
             state: state,
             config: service,
+            target: Target::Up,
         }
     }
+}
+
+enum Target {
+    Up,
+    Down,
 }
 /// Service state
 #[derive(Debug, PartialEq)]
@@ -56,6 +69,7 @@ enum State {
 #[derive(Debug)]
 enum Action {
     Monitor { name: String, service: Service },
+    Stop { name: String },
 }
 /// Message defines the process manager internal messaging
 #[derive(Debug)]
@@ -91,9 +105,28 @@ impl Handle {
             .map_err(|_| ())
         }));
     }
+
+    pub fn stop(&self, name: String) {
+        let tx = self.tx.clone();
+        tokio::spawn(lazy(move || {
+            tx.send(Message::Action(Action::Stop { name: name }))
+                .map(|_| ())
+                .map_err(|_| ())
+        }));
+    }
+
+    pub fn stop2(&self, name: String) -> impl Future<Item = Result<()>, Error = Error> {
+        let tx = self.tx.clone();
+        let (sender, receiver) = oneshot::channel::<Result<()>>();
+
+        tx.send(Message::Action(Action::Stop { name: name }))
+            .map_err(|e| format_err!("{}", e))
+            .and_then(move |_| receiver.map_err(|e| format_err!("{}", e)))
+    }
 }
 
 type MessageSender = mpsc::UnboundedSender<Message>;
+type MessageReceiver = mpsc::UnboundedReceiver<Message>;
 
 /// Manager is the main entry point, it keeps track of the
 /// processes state, and spawn them based on the dependencies.
@@ -101,7 +134,7 @@ pub struct Manager {
     pm: Arc<Mutex<pm::ProcessManager>>,
     processes: HashMap<String, Process>,
     tx: MessageSender,
-    rx: Option<mpsc::UnboundedReceiver<Message>>,
+    rx: Option<MessageReceiver>,
 }
 
 impl Manager {
@@ -282,12 +315,24 @@ impl Manager {
     }
 
     /// handle the re-spawn message
-    fn re_spawn(&mut self, name: String) {
-        self.exec(name);
+    fn on_re_spawn(&mut self, name: String) {
+        // the re-spawn message will check the target
+        // service state, and only actually re-spawn if the target
+        // is up.
+
+        let process = match self.processes.get(&name) {
+            Some(process) => process,
+            None => return,
+        };
+
+        match process.target {
+            Target::Up => self.exec(name),
+            Target::Down => return,
+        }
     }
 
     /// set service state
-    fn state(&mut self, name: String, state: State) {
+    fn on_state(&mut self, name: String, state: State) {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => return,
@@ -329,7 +374,7 @@ impl Manager {
     }
 
     /// handle process exit
-    fn exit(&mut self, name: String, status: WaitStatus) {
+    fn on_exit(&mut self, name: String, status: WaitStatus) {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => return,
@@ -369,19 +414,42 @@ impl Manager {
         tokio::spawn(f);
     }
 
-    fn action(&mut self, action: Action) {
+    fn stop(&mut self, name: String) {
+        // this action has no way to communicate
+        // the error back to the caller yet.
+
+        // stop a service by name
+        // 1- we need to set the required state of a service
+        // 2- we need to signal the service to stop
+        let process = match self.processes.get_mut(&name) {
+            Some(process) => process,
+            None => return,
+        };
+
+        process.target = Target::Down;
+        use nix::sys::signal;
+        use nix::unistd::Pid;
+
+        // todo:
+        // currently we only signal kill with sig-term, later on we need to
+        // allow service configuration its own signals for different operations (stop, reload)
+        signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM);
+    }
+
+    fn on_action(&mut self, action: Action) {
         match action {
             Action::Monitor { name, service } => self.monitor(name, service),
+            Action::Stop { name } => self.stop(name),
         }
     }
 
     /// process different message types
     fn process(&mut self, msg: Message) {
         match msg {
-            Message::Exit(name, status) => self.exit(name, status),
-            Message::ReSpawn(name) => self.re_spawn(name),
-            Message::State(name, state) => self.state(name, state),
-            Message::Action(action) => self.action(action),
+            Message::Exit(name, status) => self.on_exit(name, status),
+            Message::ReSpawn(name) => self.on_re_spawn(name),
+            Message::State(name, state) => self.on_state(name, state),
+            Message::Action(action) => self.on_action(action),
             //_ => println!("Unhandled message {:?}", msg),
         }
     }
