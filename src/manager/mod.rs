@@ -1,6 +1,4 @@
 use failure::Error;
-use futures;
-use futures::lazy;
 use nix::sys::wait::WaitStatus;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -120,6 +118,22 @@ impl Handle {
         let (sender, receiver) = oneshot::channel::<Result<()>>();
 
         tx.send(Message::Action(Action::Stop {
+            name: name,
+            ch: sender,
+        }))
+        .map_err(|e| format_err!("{}", e))
+        .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
+        .then(|r| match r {
+            Ok(r) => r,
+            Err(e) => Err(e),
+        })
+    }
+
+    pub fn start(&self, name: String) -> impl Future<Item = (), Error = Error> {
+        let tx = self.tx.clone();
+        let (sender, receiver) = oneshot::channel::<Result<()>>();
+
+        tx.send(Message::Action(Action::Start {
             name: name,
             ch: sender,
         }))
@@ -388,6 +402,17 @@ impl Manager {
         };
 
         process.pid = 0;
+        let state = match status.success() {
+            true => State::Success,
+            false => State::Error(status),
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(
+            tx.send(Message::State(name.clone(), state))
+                .map(|_| ())
+                .map_err(|_| ()),
+        );
+
         if process.config.one_shot {
             // OneShot service is the only one that can
             // be set to either success or error.
@@ -395,16 +420,6 @@ impl Manager {
             // can have a single entry point for service
             // status update, so it's either to add hooks
             // to the state change event.
-            let state = match status.success() {
-                true => State::Success,
-                false => State::Error(status),
-            };
-            let tx = self.tx.clone();
-            tokio::spawn(
-                tx.send(Message::State(name.clone(), state))
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
             return;
         }
 
@@ -431,7 +446,7 @@ impl Manager {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => {
-                ch.send(Err(format_err!("unknown service name {}", name)));
+                let _ = ch.send(Err(format_err!("unknown service name {}", name)));
                 return;
             }
         };
@@ -441,12 +456,12 @@ impl Manager {
         use nix::unistd::Pid;
 
         if let Err(e) = signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM) {
-            ch.send(Err(format_err!("{}", e)));
+            let _ = ch.send(Err(format_err!("{}", e)));
             return;
         }
 
         // unlock waiting routine
-        ch.send(Ok(()));
+        let _ = ch.send(Ok(()));
     }
 
     fn start(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
@@ -459,18 +474,19 @@ impl Manager {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => {
-                ch.send(Err(format_err!("unknown service name {}", name)));
+                let _ = ch.send(Err(format_err!("unknown service name {}", name)));
                 return;
             }
         };
 
         process.target = Target::Up;
+        println!("service {} is {:?}", name, process.state);
         match process.state {
             State::Running => (),
             _ => self.exec(name),
         }
 
-        ch.send(Ok(()));
+        let _ = ch.send(Ok(()));
     }
 
     fn on_action(&mut self, action: Action) {
