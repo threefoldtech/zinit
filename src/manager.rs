@@ -356,7 +356,8 @@ impl Manager {
         for dep in service.after.iter() {
             can = match self.processes.get(dep) {
                 Some(ps) => match ps.state {
-                    State::Running | State::Success => true,
+                    State::Running if !ps.config.one_shot => true,
+                    State::Success => true,
                     _ => false,
                 },
                 //depending on an undefined service. This still can be resolved later
