@@ -41,8 +41,8 @@ enum Target {
     Down,
 }
 /// Service state
-#[derive(Debug, PartialEq)]
-enum State {
+#[derive(Debug, PartialEq, Clone)]
+pub enum State {
     /// Blocked means one or more dependencies hasn't been met yet. Service can stay in
     /// this state as long as at least one dependency is not in either Running, or Success
     Blocked,
@@ -77,6 +77,13 @@ enum Action {
     Start {
         name: String,
         ch: oneshot::Sender<Result<()>>,
+    },
+    List {
+        ch: oneshot::Sender<Result<Vec<String>>>,
+    },
+    Status {
+        name: String,
+        ch: oneshot::Sender<Result<State>>,
     },
 }
 /// Message defines the process manager internal messaging
@@ -113,6 +120,19 @@ impl Handle {
         .map_err(|e| format_err!("{}", e))
     }
 
+    pub fn list(&self) -> impl Future<Item = Vec<String>, Error = Error> {
+        let tx = self.tx.clone();
+        let (sender, receiver) = oneshot::channel::<Result<Vec<String>>>();
+
+        tx.send(Message::Action(Action::List { ch: sender }))
+            .map_err(|e| format_err!("{}", e))
+            .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
+            .then(|r| match r {
+                Ok(r) => r,
+                Err(e) => Err(e),
+            })
+    }
+
     pub fn stop(&self, name: String) -> impl Future<Item = (), Error = Error> {
         let tx = self.tx.clone();
         let (sender, receiver) = oneshot::channel::<Result<()>>();
@@ -134,6 +154,22 @@ impl Handle {
         let (sender, receiver) = oneshot::channel::<Result<()>>();
 
         tx.send(Message::Action(Action::Start {
+            name: name,
+            ch: sender,
+        }))
+        .map_err(|e| format_err!("{}", e))
+        .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
+        .then(|r| match r {
+            Ok(r) => r,
+            Err(e) => Err(e),
+        })
+    }
+
+    pub fn status(&self, name: String) -> impl Future<Item = State, Error = Error> {
+        let tx = self.tx.clone();
+        let (sender, receiver) = oneshot::channel::<Result<State>>();
+
+        tx.send(Message::Action(Action::Status {
             name: name,
             ch: sender,
         }))
@@ -480,13 +516,41 @@ impl Manager {
         };
 
         process.target = Target::Up;
-        println!("service {} is {:?}", name, process.state);
         match process.state {
-            State::Running => (),
+            State::Running | State::Spawned => (),
             _ => self.exec(name),
         }
 
         let _ = ch.send(Ok(()));
+    }
+
+    fn status(&mut self, name: String, ch: oneshot::Sender<Result<State>>) {
+        // this action has no way to communicate
+        // the error back to the caller yet.
+
+        // start a service by name
+        // 1- we need to set the required state of a service
+        // 2- we need to exec the service if it's not already running
+        let process = match self.processes.get_mut(&name) {
+            Some(process) => process,
+            None => {
+                let _ = ch.send(Err(format_err!("unknown service name {}", name)));
+                return;
+            }
+        };
+
+        let _ = ch.send(Ok(process.state.clone()));
+    }
+
+    fn list(&mut self, ch: oneshot::Sender<Result<Vec<String>>>) {
+        // this action has no way to communicate
+        // the error back to the caller yet.
+        let mut services = vec![];
+        for key in self.processes.keys() {
+            services.push(key.clone());
+        }
+
+        let _ = ch.send(Ok(services));
     }
 
     fn on_action(&mut self, action: Action) {
@@ -494,6 +558,8 @@ impl Manager {
             Action::Monitor { name, service } => self.monitor(name, service),
             Action::Stop { name, ch } => self.stop(name, ch),
             Action::Start { name, ch } => self.start(name, ch),
+            Action::Status { name, ch } => self.status(name, ch),
+            Action::List { ch } => self.list(ch),
         }
     }
 
