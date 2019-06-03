@@ -68,8 +68,18 @@ enum State {
 
 #[derive(Debug)]
 enum Action {
-    Monitor { name: String, service: Service },
-    Stop { name: String },
+    Monitor {
+        name: String,
+        service: Service,
+    },
+    Stop {
+        name: String,
+        ch: oneshot::Sender<Result<()>>,
+    },
+    Start {
+        name: String,
+        ch: oneshot::Sender<Result<()>>,
+    },
 }
 /// Message defines the process manager internal messaging
 #[derive(Debug)]
@@ -94,34 +104,31 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn monitor(&self, name: String, service: Service) {
+    pub fn monitor(&self, name: String, service: Service) -> impl Future<Item = (), Error = Error> {
         let tx = self.tx.clone();
-        tokio::spawn(lazy(move || {
-            tx.send(Message::Action(Action::Monitor {
-                name: name,
-                service: service,
-            }))
-            .map(|_| ())
-            .map_err(|_| ())
-        }));
+
+        tx.send(Message::Action(Action::Monitor {
+            name: name,
+            service: service,
+        }))
+        .map(|_| ())
+        .map_err(|e| format_err!("{}", e))
     }
 
-    pub fn stop(&self, name: String) {
-        let tx = self.tx.clone();
-        tokio::spawn(lazy(move || {
-            tx.send(Message::Action(Action::Stop { name: name }))
-                .map(|_| ())
-                .map_err(|_| ())
-        }));
-    }
-
-    pub fn stop2(&self, name: String) -> impl Future<Item = Result<()>, Error = Error> {
+    pub fn stop(&self, name: String) -> impl Future<Item = (), Error = Error> {
         let tx = self.tx.clone();
         let (sender, receiver) = oneshot::channel::<Result<()>>();
 
-        tx.send(Message::Action(Action::Stop { name: name }))
-            .map_err(|e| format_err!("{}", e))
-            .and_then(move |_| receiver.map_err(|e| format_err!("{}", e)))
+        tx.send(Message::Action(Action::Stop {
+            name: name,
+            ch: sender,
+        }))
+        .map_err(|e| format_err!("{}", e))
+        .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
+        .then(|r| match r {
+            Ok(r) => r,
+            Err(e) => Err(e),
+        })
     }
 }
 
@@ -414,7 +421,7 @@ impl Manager {
         tokio::spawn(f);
     }
 
-    fn stop(&mut self, name: String) {
+    fn stop(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
         // this action has no way to communicate
         // the error back to the caller yet.
 
@@ -423,23 +430,54 @@ impl Manager {
         // 2- we need to signal the service to stop
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
-            None => return,
+            None => {
+                ch.send(Err(format_err!("unknown service name {}", name)));
+                return;
+            }
         };
 
         process.target = Target::Down;
         use nix::sys::signal;
         use nix::unistd::Pid;
 
-        // todo:
-        // currently we only signal kill with sig-term, later on we need to
-        // allow service configuration its own signals for different operations (stop, reload)
-        signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM);
+        if let Err(e) = signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM) {
+            ch.send(Err(format_err!("{}", e)));
+            return;
+        }
+
+        // unlock waiting routine
+        ch.send(Ok(()));
+    }
+
+    fn start(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
+        // this action has no way to communicate
+        // the error back to the caller yet.
+
+        // start a service by name
+        // 1- we need to set the required state of a service
+        // 2- we need to exec the service if it's not already running
+        let process = match self.processes.get_mut(&name) {
+            Some(process) => process,
+            None => {
+                ch.send(Err(format_err!("unknown service name {}", name)));
+                return;
+            }
+        };
+
+        process.target = Target::Up;
+        match process.state {
+            State::Running => (),
+            _ => self.exec(name),
+        }
+
+        ch.send(Ok(()));
     }
 
     fn on_action(&mut self, action: Action) {
         match action {
             Action::Monitor { name, service } => self.monitor(name, service),
-            Action::Stop { name } => self.stop(name),
+            Action::Stop { name, ch } => self.stop(name, ch),
+            Action::Start { name, ch } => self.start(name, ch),
         }
     }
 
