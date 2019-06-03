@@ -472,6 +472,7 @@ impl Manager {
         tokio::spawn(f);
     }
 
+    /// stop action.
     fn stop(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
         // this action has no way to communicate
         // the error back to the caller yet.
@@ -500,6 +501,7 @@ impl Manager {
         let _ = ch.send(Ok(()));
     }
 
+    /// start action
     fn start(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
         // this action has no way to communicate
         // the error back to the caller yet.
@@ -524,6 +526,7 @@ impl Manager {
         let _ = ch.send(Ok(()));
     }
 
+    /// status action, reads current service status
     fn status(&mut self, name: String, ch: oneshot::Sender<Result<State>>) {
         // this action has no way to communicate
         // the error back to the caller yet.
@@ -542,6 +545,7 @@ impl Manager {
         let _ = ch.send(Ok(process.state.clone()));
     }
 
+    /// list action
     fn list(&mut self, ch: oneshot::Sender<Result<Vec<String>>>) {
         // this action has no way to communicate
         // the error back to the caller yet.
@@ -553,6 +557,7 @@ impl Manager {
         let _ = ch.send(Ok(services));
     }
 
+    /// action message has been received
     fn on_action(&mut self, action: Action) {
         match action {
             Action::Monitor { name, service } => self.monitor(name, service),
