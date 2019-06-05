@@ -36,24 +36,9 @@ pub fn init(config: &str) -> Result<()> {
         let handle = manager.run();
 
         for (name, config) in configs.into_iter() {
-            tokio::spawn(handle.monitor(name, config).map_err(|err| {
-                println!("failed to start monitoring service {}", err);
-                ()
-            }));
+            handle.monitor(name, config);
         }
 
-        // DEBUG CODE, DO NOT COMMIT
-        // IF U READ THIS IT MEANS I COMMITTED IT BY MISTAKE (again)
-        // use std::time;
-        // use tokio::timer;
-        // timer::Delay::new(time::Instant::now() + time::Duration::from_secs(5))
-        //     .map_err(|_| ())
-        //     .and_then(move |_| {
-        //         handle.stop(String::from("redis")).map_err(|r| {
-        //             println!("stop err {:?}", r);
-        //             ()
-        //         })
-        //     })
         Ok(())
     }));
 
