@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::timer;
 
 use crate::settings::Service;
@@ -64,28 +63,6 @@ pub enum State {
     Failure,
 }
 
-#[derive(Debug)]
-enum Action {
-    Monitor {
-        name: String,
-        service: Service,
-    },
-    Stop {
-        name: String,
-        ch: oneshot::Sender<Result<()>>,
-    },
-    Start {
-        name: String,
-        ch: oneshot::Sender<Result<()>>,
-    },
-    List {
-        ch: oneshot::Sender<Result<Vec<String>>>,
-    },
-    Status {
-        name: String,
-        ch: oneshot::Sender<Result<State>>,
-    },
-}
 /// Message defines the process manager internal messaging
 #[derive(Debug)]
 enum Message {
@@ -100,85 +77,40 @@ enum Message {
     State(String, State),
     /// ReSpawn a service after exit
     ReSpawn(String),
-
-    Action(Action),
 }
 
 pub struct Handle {
-    tx: MessageSender,
+    //tx: MessageSender,
+    inner: Arc<Mutex<Manager>>,
+}
+
+impl Clone for Handle {
+    fn clone(&self) -> Self {
+        Handle {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl Handle {
-    pub fn monitor(&self, name: String, service: Service) -> impl Future<Item = (), Error = Error> {
-        let tx = self.tx.clone();
-
-        tx.send(Message::Action(Action::Monitor {
-            name: name,
-            service: service,
-        }))
-        .map(|_| ())
-        .map_err(|e| format_err!("{}", e))
+    pub fn monitor(&self, name: String, service: Service) {
+        self.inner.lock().unwrap().monitor(name, service)
     }
 
-    pub fn list(&self) -> impl Future<Item = Vec<String>, Error = Error> {
-        let tx = self.tx.clone();
-        let (sender, receiver) = oneshot::channel::<Result<Vec<String>>>();
-
-        tx.send(Message::Action(Action::List { ch: sender }))
-            .map_err(|e| format_err!("{}", e))
-            .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
-            .then(|r| match r {
-                Ok(r) => r,
-                Err(e) => Err(e),
-            })
+    pub fn list(&self) -> Vec<String> {
+        self.inner.lock().unwrap().list()
     }
 
-    pub fn stop(&self, name: String) -> impl Future<Item = (), Error = Error> {
-        let tx = self.tx.clone();
-        let (sender, receiver) = oneshot::channel::<Result<()>>();
-
-        tx.send(Message::Action(Action::Stop {
-            name: name,
-            ch: sender,
-        }))
-        .map_err(|e| format_err!("{}", e))
-        .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
-        .then(|r| match r {
-            Ok(r) => r,
-            Err(e) => Err(e),
-        })
+    pub fn stop(&self, name: String) -> Result<()> {
+        self.inner.lock().unwrap().stop(name)
     }
 
-    pub fn start(&self, name: String) -> impl Future<Item = (), Error = Error> {
-        let tx = self.tx.clone();
-        let (sender, receiver) = oneshot::channel::<Result<()>>();
-
-        tx.send(Message::Action(Action::Start {
-            name: name,
-            ch: sender,
-        }))
-        .map_err(|e| format_err!("{}", e))
-        .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
-        .then(|r| match r {
-            Ok(r) => r,
-            Err(e) => Err(e),
-        })
+    pub fn start(&self, name: String) -> Result<()> {
+        self.inner.lock().unwrap().start(name)
     }
 
-    pub fn status(&self, name: String) -> impl Future<Item = State, Error = Error> {
-        let tx = self.tx.clone();
-        let (sender, receiver) = oneshot::channel::<Result<State>>();
-
-        tx.send(Message::Action(Action::Status {
-            name: name,
-            ch: sender,
-        }))
-        .map_err(|e| format_err!("{}", e))
-        .then(move |_| receiver.map_err(|e| format_err!("{}", e)))
-        .then(|r| match r {
-            Ok(r) => r,
-            Err(e) => Err(e),
-        })
+    pub fn status(&self, name: String) -> Result<State> {
+        self.inner.lock().unwrap().status(name)
     }
 }
 
@@ -473,7 +405,7 @@ impl Manager {
     }
 
     /// stop action.
-    fn stop(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
+    fn stop(&mut self, name: String) -> Result<()> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
@@ -483,8 +415,7 @@ impl Manager {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => {
-                let _ = ch.send(Err(format_err!("unknown service name {}", name)));
-                return;
+                return Err(format_err!("unkown service name {}", name));
             }
         };
 
@@ -492,17 +423,13 @@ impl Manager {
         use nix::sys::signal;
         use nix::unistd::Pid;
 
-        if let Err(e) = signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM) {
-            let _ = ch.send(Err(format_err!("{}", e)));
-            return;
-        }
+        signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM)?;
 
-        // unlock waiting routine
-        let _ = ch.send(Ok(()));
+        Ok(())
     }
 
     /// start action
-    fn start(&mut self, name: String, ch: oneshot::Sender<Result<()>>) {
+    fn start(&mut self, name: String) -> Result<()> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
@@ -512,8 +439,7 @@ impl Manager {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => {
-                let _ = ch.send(Err(format_err!("unknown service name {}", name)));
-                return;
+                return Err(format_err!("unknown service name {}", name));
             }
         };
 
@@ -523,11 +449,11 @@ impl Manager {
             _ => self.exec(name),
         }
 
-        let _ = ch.send(Ok(()));
+        Ok(())
     }
 
     /// status action, reads current service status
-    fn status(&mut self, name: String, ch: oneshot::Sender<Result<State>>) {
+    fn status(&mut self, name: String) -> Result<State> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
@@ -537,16 +463,15 @@ impl Manager {
         let process = match self.processes.get_mut(&name) {
             Some(process) => process,
             None => {
-                let _ = ch.send(Err(format_err!("unknown service name {}", name)));
-                return;
+                return Err(format_err!("unknown service name {}", name));
             }
         };
 
-        let _ = ch.send(Ok(process.state.clone()));
+        Ok(process.state.clone())
     }
 
     /// list action
-    fn list(&mut self, ch: oneshot::Sender<Result<Vec<String>>>) {
+    fn list(&self) -> Vec<String> {
         // this action has no way to communicate
         // the error back to the caller yet.
         let mut services = vec![];
@@ -554,18 +479,7 @@ impl Manager {
             services.push(key.clone());
         }
 
-        let _ = ch.send(Ok(services));
-    }
-
-    /// action message has been received
-    fn on_action(&mut self, action: Action) {
-        match action {
-            Action::Monitor { name, service } => self.monitor(name, service),
-            Action::Stop { name, ch } => self.stop(name, ch),
-            Action::Start { name, ch } => self.start(name, ch),
-            Action::Status { name, ch } => self.status(name, ch),
-            Action::List { ch } => self.list(ch),
-        }
+        services
     }
 
     /// process different message types
@@ -574,7 +488,6 @@ impl Manager {
             Message::Exit(name, status) => self.on_exit(name, status),
             Message::ReSpawn(name) => self.on_re_spawn(name),
             Message::State(name, state) => self.on_state(name, state),
-            Message::Action(action) => self.on_action(action),
             //_ => println!("Unhandled message {:?}", msg),
         }
     }
@@ -589,12 +502,12 @@ impl Manager {
         //start the process table
         tokio::spawn(self.pm.lock().unwrap().run());
 
-        let tx = self.tx.clone();
-
+        let mgr = Arc::new(Mutex::new(self));
         // start the process manager main loop
+        let inner = Arc::clone(&mgr);
         let future = rx
             .for_each(move |msg| {
-                self.process(msg);
+                mgr.lock().unwrap().process(msg);
                 Ok(())
             })
             .map_err(|e| {
@@ -603,6 +516,6 @@ impl Manager {
             });
 
         tokio::spawn(future);
-        Handle { tx }
+        Handle { inner }
     }
 }
