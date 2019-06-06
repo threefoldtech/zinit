@@ -1,6 +1,8 @@
 use failure::Error;
 use future;
+use nix::sys::signal;
 use shlex;
+use std::str::FromStr;
 use std::{fs, path};
 use tokio::codec::{Framed, LinesCodec};
 use tokio::net::{UnixListener, UnixStream};
@@ -59,12 +61,31 @@ fn stop(args: &[String], handle: Handle) -> Result<String> {
     Ok(DONE.to_string())
 }
 
+fn kill(args: &[String], handle: Handle) -> Result<String> {
+    if args.len() != 2 {
+        bail!("invalid arguments, expecting two argument 'stop <service> SIGNAL'")
+    }
+
+    let sig = signal::Signal::from_str(&args[1].to_uppercase())?;
+    handle.kill(&args[0], sig)?;
+    Ok(DONE.to_string())
+}
+
 fn start(args: &[String], handle: Handle) -> Result<String> {
     if args.len() != 1 {
         bail!("invalid arguments, expecting one argument service name 'start <service>'")
     }
 
     handle.start(&args[0])?;
+    Ok(DONE.to_string())
+}
+
+fn forget(args: &[String], handle: Handle) -> Result<String> {
+    if args.len() != 1 {
+        bail!("invalid arguments, expecting one argument service name 'forget <service>'")
+    }
+
+    handle.forget(&args[0])?;
     Ok(DONE.to_string())
 }
 
@@ -78,8 +99,11 @@ fn process_cmd(handle: Handle, cmd: Vec<String>) -> impl Future<Item = String, E
         "status" => status(&cmd[1..], handle),
         "stop" => stop(&cmd[1..], handle),
         "start" => start(&cmd[1..], handle),
+        "kill" => kill(&cmd[1..], handle),
+        "forget" => forget(&cmd[1..], handle),
         _ => Err(format_err!("unknown command")),
     };
+
     match answer {
         Ok(answer) => future::Either::A(future::ok(answer)),
         Err(err) => future::Either::B(future::err(err)),
