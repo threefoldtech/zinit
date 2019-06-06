@@ -6,9 +6,10 @@ use tokio::codec::{Framed, LinesCodec};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::prelude::*;
 
-use crate::manager::Handle;
+use crate::manager::{Handle, State};
 
 const SOCKET_NAME: &str = "zinit.socket";
+const DONE: &str = "done";
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -16,8 +17,8 @@ fn list(handle: Handle) -> Result<String> {
     let mut result = String::new();
     for service in handle.list() {
         result.push_str(&service);
-        let status = handle.status(service)?;
-        result.push_str(&format!(": {:?}", status));
+        let process = handle.status(service)?;
+        result.push_str(&format!(": {:?}", process.state));
         result.push('\n');
     }
     result.pop();
@@ -30,9 +31,41 @@ fn status(args: &[String], handle: Handle) -> Result<String> {
         bail!("invalid arguments, expecting one argument service name 'status <service>'")
     }
 
-    let status = handle.status(&args[0])?;
-    result.push_str(&format!("{:?}", status));
+    let process = handle.status(&args[0])?;
+    result += &format!("name: {}\n", &args[0]);
+    result += &format!("pid: {}\n", process.pid);
+    result += &format!("state: {:?}\n", process.state);
+    result += &format!("target: {:?}\n", process.target);
+    if process.config.after.len() > 0 {
+        result += &format!("after: \n");
+    }
+    for dep in process.config.after {
+        let state = match handle.status(&dep) {
+            Ok(dep) => dep.state,
+            Err(_) => State::Unknown,
+        };
+        result += &format!(" - {}: {:?}\n", dep, state);
+    }
+    result.pop();
     Ok(result)
+}
+
+fn stop(args: &[String], handle: Handle) -> Result<String> {
+    if args.len() != 1 {
+        bail!("invalid arguments, expecting one argument service name 'stop <service>'")
+    }
+
+    handle.stop(&args[0])?;
+    Ok(DONE.to_string())
+}
+
+fn start(args: &[String], handle: Handle) -> Result<String> {
+    if args.len() != 1 {
+        bail!("invalid arguments, expecting one argument service name 'start <service>'")
+    }
+
+    handle.start(&args[0])?;
+    Ok(DONE.to_string())
 }
 
 fn process_cmd(handle: Handle, cmd: Vec<String>) -> impl Future<Item = String, Error = Error> {
@@ -43,8 +76,8 @@ fn process_cmd(handle: Handle, cmd: Vec<String>) -> impl Future<Item = String, E
     let answer = match cmd[0].as_ref() {
         "list" => list(handle),
         "status" => status(&cmd[1..], handle),
-        // "hello" => future::ok(format!("hi {:?}", &cmd[1..])),
-        // "say" => future::ok(format!("{:?}", &cmd[1..])),
+        "stop" => stop(&cmd[1..], handle),
+        "start" => start(&cmd[1..], handle),
         _ => Err(format_err!("unknown command")),
     };
     match answer {
