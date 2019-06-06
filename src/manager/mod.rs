@@ -101,16 +101,16 @@ impl Handle {
         self.inner.lock().unwrap().list()
     }
 
-    pub fn stop(&self, name: String) -> Result<()> {
-        self.inner.lock().unwrap().stop(name)
+    pub fn stop<T: AsRef<str>>(&self, name: T) -> Result<()> {
+        self.inner.lock().unwrap().stop(name.as_ref())
     }
 
-    pub fn start(&self, name: String) -> Result<()> {
-        self.inner.lock().unwrap().start(name)
+    pub fn start<T: AsRef<str>>(&self, name: T) -> Result<()> {
+        self.inner.lock().unwrap().start(name.as_ref())
     }
 
-    pub fn status(&self, name: String) -> Result<State> {
-        self.inner.lock().unwrap().status(name)
+    pub fn status<T: AsRef<str>>(&self, name: T) -> Result<State> {
+        self.inner.lock().unwrap().status(name.as_ref())
     }
 }
 
@@ -405,14 +405,14 @@ impl Manager {
     }
 
     /// stop action.
-    fn stop(&mut self, name: String) -> Result<()> {
+    fn stop(&mut self, name: &str) -> Result<()> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
         // stop a service by name
         // 1- we need to set the required state of a service
         // 2- we need to signal the service to stop
-        let process = match self.processes.get_mut(&name) {
+        let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
                 return Err(format_err!("unkown service name {}", name));
@@ -429,14 +429,14 @@ impl Manager {
     }
 
     /// start action
-    fn start(&mut self, name: String) -> Result<()> {
+    fn start(&mut self, name: &str) -> Result<()> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
         // start a service by name
         // 1- we need to set the required state of a service
         // 2- we need to exec the service if it's not already running
-        let process = match self.processes.get_mut(&name) {
+        let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
                 return Err(format_err!("unknown service name {}", name));
@@ -446,21 +446,21 @@ impl Manager {
         process.target = Target::Up;
         match process.state {
             State::Running | State::Spawned => (),
-            _ => self.exec(name),
+            _ => self.exec(String::from(name)),
         }
 
         Ok(())
     }
 
     /// status action, reads current service status
-    fn status(&mut self, name: String) -> Result<State> {
+    fn status(&mut self, name: &str) -> Result<State> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
         // start a service by name
         // 1- we need to set the required state of a service
         // 2- we need to exec the service if it's not already running
-        let process = match self.processes.get_mut(&name) {
+        let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
                 return Err(format_err!("unknown service name {}", name));

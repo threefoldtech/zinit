@@ -1,5 +1,7 @@
 use clap::{App, Arg, SubCommand};
 
+#[allow(dead_code)]
+mod api;
 mod app;
 #[allow(dead_code)]
 mod manager;
@@ -8,8 +10,13 @@ mod settings;
 
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate log;
+extern crate simple_logger;
 
 fn main() {
+    simple_logger::init_with_level(log::Level::Debug).unwrap();
+
     let matches = App::new("zinit")
         .author("Muhamad Azmy, https://github.com/muhamadazmy")
         .version("0.1")

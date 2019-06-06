@@ -1,3 +1,4 @@
+use crate::api;
 use crate::manager;
 use crate::settings;
 
@@ -37,6 +38,10 @@ pub fn init(config: &str) -> Result<()> {
 
         for (name, config) in configs.into_iter() {
             handle.monitor(name, config);
+        }
+
+        if let Err(e) = api::run(handle) {
+            error!("failed to start ctrl api {}", e);
         }
 
         Ok(())
