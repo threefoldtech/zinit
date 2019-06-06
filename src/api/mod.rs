@@ -88,15 +88,12 @@ fn forget(args: &[String], handle: Handle) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn process_cmd(
-    handle: Handle,
-    cmd: Vec<String>,
-) -> impl Future<Item = Option<String>, Error = Error> {
+fn process_cmd(handle: Handle, cmd: Vec<String>) -> Result<Option<String>> {
     if cmd.len() == 0 {
-        return future::Either::B(future::err(format_err!("missing command")));
+        bail!("missing command");
     }
 
-    let answer = match cmd[0].as_ref() {
+    match cmd[0].as_ref() {
         "list" => list(handle),
         "status" => status(&cmd[1..], handle),
         "stop" => stop(&cmd[1..], handle),
@@ -104,11 +101,6 @@ fn process_cmd(
         "kill" => kill(&cmd[1..], handle),
         "forget" => forget(&cmd[1..], handle),
         _ => Err(format_err!("unknown command")),
-    };
-
-    match answer {
-        Ok(answer) => future::Either::A(future::ok(answer)),
-        Err(err) => future::Either::B(future::err(err)),
     }
 }
 
@@ -121,12 +113,12 @@ fn process(handle: Handle, socket: UnixStream) {
         .fold(sink, move |sink, line| {
             let handle = handle.clone();
             let cmd = shlex::split(&line);
-            let future = match cmd {
-                Some(cmd) => future::Either::A(process_cmd(handle, cmd)),
-                None => future::Either::B(future::ok(Some(String::from("invalid command")))),
+            let result = match cmd {
+                Some(cmd) => process_cmd(handle, cmd),
+                None => Err(format_err!("invalid command")),
             };
 
-            future.then(|answer| {
+            future::done(result).then(|answer| {
                 let mut buffer = String::new();
                 // Yes, it's intended to look like http header
                 // to support adding more metadata in the future
