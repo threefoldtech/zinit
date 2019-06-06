@@ -16,6 +16,20 @@ type Result<T> = std::result::Result<T, Error>;
 pub type Services = HashMap<String, Service>;
 
 #[serde(default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Signal {
+    pub stop: String,
+}
+
+impl Default for Signal {
+    fn default() -> Self {
+        Signal {
+            stop: String::from("sigterm"),
+        }
+    }
+}
+
+#[serde(default)]
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Service {
     /// command to run
@@ -26,8 +40,22 @@ pub struct Service {
     #[serde(rename = "oneshot")]
     pub one_shot: bool,
     pub after: Vec<String>,
+    pub signal: Signal,
 }
 
+impl Service {
+    pub fn validate(&self) -> Result<()> {
+        use nix::sys::signal::Signal;
+        use std::str::FromStr;
+        if self.exec.len() == 0 {
+            bail!("missing exec directive");
+        }
+
+        Signal::from_str(&self.signal.stop.to_uppercase())?;
+
+        Ok(())
+    }
+}
 /// load loads a single file
 pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
     let p = t.as_ref();

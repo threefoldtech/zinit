@@ -98,7 +98,7 @@ impl Clone for Handle {
 }
 
 impl Handle {
-    pub fn monitor(&self, name: String, service: Service) {
+    pub fn monitor(&self, name: String, service: Service) -> Result<()> {
         self.inner.lock().unwrap().monitor(name, service)
     }
 
@@ -299,7 +299,9 @@ impl Manager {
     }
 
     /// handle the monitor message
-    fn monitor(&mut self, name: String, service: Service) {
+    fn monitor(&mut self, name: String, service: Service) -> Result<()> {
+        service.validate()?;
+
         let can_schedule = self.can_schedule(&service);
 
         let state = match can_schedule {
@@ -314,6 +316,8 @@ impl Manager {
         if can_schedule {
             self.exec(name);
         }
+
+        Ok(())
     }
 
     /// handle the re-spawn message
@@ -436,8 +440,10 @@ impl Manager {
         }
 
         use nix::unistd::Pid;
+        use std::str::FromStr;
+        let sig = signal::Signal::from_str(&process.config.signal.stop.to_uppercase())?;
 
-        signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM)?;
+        signal::kill(Pid::from_raw(process.pid as i32), sig)?;
 
         Ok(())
     }
