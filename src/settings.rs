@@ -16,7 +16,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub type Services = HashMap<String, Service>;
 
 #[serde(default)]
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Service {
     /// command to run
     pub exec: String,

@@ -15,13 +15,14 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// Process is a representation of a scheduled/running
 /// service
-struct Process {
-    pid: u32,
-    state: State,
+#[derive(Clone)]
+pub struct Process {
+    pub pid: u32,
+    pub state: State,
     // config is the service configuration
-    config: Service,
+    pub config: Service,
     // target is the target state of the service (up, down)
-    target: Target,
+    pub target: Target,
 }
 
 impl Process {
@@ -35,13 +36,16 @@ impl Process {
     }
 }
 
-enum Target {
+#[derive(Clone, Debug)]
+pub enum Target {
     Up,
     Down,
 }
 /// Service state
 #[derive(Debug, PartialEq, Clone)]
 pub enum State {
+    /// service is unknown state or service is not defined
+    Unknown,
     /// Blocked means one or more dependencies hasn't been met yet. Service can stay in
     /// this state as long as at least one dependency is not in either Running, or Success
     Blocked,
@@ -109,7 +113,7 @@ impl Handle {
         self.inner.lock().unwrap().start(name.as_ref())
     }
 
-    pub fn status<T: AsRef<str>>(&self, name: T) -> Result<State> {
+    pub fn status<T: AsRef<str>>(&self, name: T) -> Result<Process> {
         self.inner.lock().unwrap().status(name.as_ref())
     }
 }
@@ -415,11 +419,15 @@ impl Manager {
         let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
-                return Err(format_err!("unkown service name {}", name));
+                bail!("unknown service name {}", name);
             }
         };
 
         process.target = Target::Down;
+        if process.pid <= 0 {
+            bail!("service is not running");
+        }
+
         use nix::sys::signal;
         use nix::unistd::Pid;
 
@@ -439,7 +447,7 @@ impl Manager {
         let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
-                return Err(format_err!("unknown service name {}", name));
+                bail!("unknown service name {}", name);
             }
         };
 
@@ -453,7 +461,7 @@ impl Manager {
     }
 
     /// status action, reads current service status
-    fn status(&mut self, name: &str) -> Result<State> {
+    fn status(&mut self, name: &str) -> Result<Process> {
         // this action has no way to communicate
         // the error back to the caller yet.
 
@@ -463,11 +471,11 @@ impl Manager {
         let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
-                return Err(format_err!("unknown service name {}", name));
+                bail!("unknown service name {}", name);
             }
         };
 
-        Ok(process.state.clone())
+        Ok(process.clone())
     }
 
     /// list action
