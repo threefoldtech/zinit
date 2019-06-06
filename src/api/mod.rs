@@ -11,11 +11,10 @@ use tokio::prelude::*;
 use crate::manager::{Handle, State};
 
 const SOCKET_NAME: &str = "zinit.socket";
-const DONE: &str = "done";
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn list(handle: Handle) -> Result<String> {
+fn list(handle: Handle) -> Result<Option<String>> {
     let mut result = String::new();
     for service in handle.list() {
         result.push_str(&service);
@@ -24,10 +23,10 @@ fn list(handle: Handle) -> Result<String> {
         result.push('\n');
     }
     result.pop();
-    Ok(result)
+    Ok(Some(result))
 }
 
-fn status(args: &[String], handle: Handle) -> Result<String> {
+fn status(args: &[String], handle: Handle) -> Result<Option<String>> {
     let mut result = String::new();
     if args.len() != 1 {
         bail!("invalid arguments, expecting one argument service name 'status <service>'")
@@ -49,47 +48,50 @@ fn status(args: &[String], handle: Handle) -> Result<String> {
         result += &format!(" - {}: {:?}\n", dep, state);
     }
     result.pop();
-    Ok(result)
+    Ok(Some(result))
 }
 
-fn stop(args: &[String], handle: Handle) -> Result<String> {
+fn stop(args: &[String], handle: Handle) -> Result<Option<String>> {
     if args.len() != 1 {
         bail!("invalid arguments, expecting one argument service name 'stop <service>'")
     }
 
     handle.stop(&args[0])?;
-    Ok(DONE.to_string())
+    Ok(None)
 }
 
-fn kill(args: &[String], handle: Handle) -> Result<String> {
+fn kill(args: &[String], handle: Handle) -> Result<Option<String>> {
     if args.len() != 2 {
         bail!("invalid arguments, expecting two argument 'stop <service> SIGNAL'")
     }
 
     let sig = signal::Signal::from_str(&args[1].to_uppercase())?;
     handle.kill(&args[0], sig)?;
-    Ok(DONE.to_string())
+    Ok(None)
 }
 
-fn start(args: &[String], handle: Handle) -> Result<String> {
+fn start(args: &[String], handle: Handle) -> Result<Option<String>> {
     if args.len() != 1 {
         bail!("invalid arguments, expecting one argument service name 'start <service>'")
     }
 
     handle.start(&args[0])?;
-    Ok(DONE.to_string())
+    Ok(None)
 }
 
-fn forget(args: &[String], handle: Handle) -> Result<String> {
+fn forget(args: &[String], handle: Handle) -> Result<Option<String>> {
     if args.len() != 1 {
         bail!("invalid arguments, expecting one argument service name 'forget <service>'")
     }
 
     handle.forget(&args[0])?;
-    Ok(DONE.to_string())
+    Ok(None)
 }
 
-fn process_cmd(handle: Handle, cmd: Vec<String>) -> impl Future<Item = String, Error = Error> {
+fn process_cmd(
+    handle: Handle,
+    cmd: Vec<String>,
+) -> impl Future<Item = Option<String>, Error = Error> {
     if cmd.len() == 0 {
         return future::Either::B(future::err(format_err!("missing command")));
     }
@@ -121,20 +123,28 @@ fn process(handle: Handle, socket: UnixStream) {
             let cmd = shlex::split(&line);
             let future = match cmd {
                 Some(cmd) => future::Either::A(process_cmd(handle, cmd)),
-                None => future::Either::B(future::ok(String::from("invalid command"))),
+                None => future::Either::B(future::ok(Some(String::from("invalid command")))),
             };
 
             future.then(|answer| {
                 let mut buffer = String::new();
+                // Yes, it's intended to look like http header
+                // to support adding more metadata in the future
+                // currently the only header we have is STATUS
+                // also this allow the protocol to be very simply
+                // and human readable at the same time.
                 match answer {
                     Ok(answer) => {
-                        buffer.push_str("STATUS: OK");
-                        buffer.push_str("\r\n\r\n");
-                        buffer.push_str(&answer);
+                        buffer.push_str("STATUS: OK\r\n");
+                        buffer.push_str("\r\n");
+                        match answer {
+                            Some(answer) => buffer.push_str(&answer),
+                            None => (),
+                        };
                     }
                     Err(err) => {
-                        buffer.push_str("STATUS: ERROR\n");
-                        buffer.push_str("\r\n\r\n");
+                        buffer.push_str("STATUS: ERROR\r\n");
+                        buffer.push_str("\r\n");
                         buffer.push_str(&format!("{}", err));
                     }
                 }
