@@ -1,4 +1,5 @@
 use failure::Error;
+use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -36,7 +37,7 @@ impl Process {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Up,
     Down,
@@ -107,6 +108,14 @@ impl Handle {
 
     pub fn stop<T: AsRef<str>>(&self, name: T) -> Result<()> {
         self.inner.lock().unwrap().stop(name.as_ref())
+    }
+
+    pub fn forget<T: AsRef<str>>(&self, name: T) -> Result<()> {
+        self.inner.lock().unwrap().forget(name.as_ref())
+    }
+
+    pub fn kill<T: AsRef<str>>(&self, name: T, signal: signal::Signal) -> Result<()> {
+        self.inner.lock().unwrap().kill(name.as_ref(), signal)
     }
 
     pub fn start<T: AsRef<str>>(&self, name: T) -> Result<()> {
@@ -410,11 +419,8 @@ impl Manager {
 
     /// stop action.
     fn stop(&mut self, name: &str) -> Result<()> {
-        // this action has no way to communicate
-        // the error back to the caller yet.
-
         // stop a service by name
-        // 1- we need to set the required state of a service
+        // 1- we need to set the required target of a service
         // 2- we need to signal the service to stop
         let process = match self.processes.get_mut(name) {
             Some(process) => process,
@@ -425,13 +431,33 @@ impl Manager {
 
         process.target = Target::Down;
         if process.pid <= 0 {
-            bail!("service is not running");
+            debug!("service '{}' is not running, skipping kill", name);
+            return Ok(());
         }
 
-        use nix::sys::signal;
         use nix::unistd::Pid;
 
         signal::kill(Pid::from_raw(process.pid as i32), signal::Signal::SIGTERM)?;
+
+        Ok(())
+    }
+
+    /// kill action. send signal to any service
+    fn kill(&mut self, name: &str, signal: signal::Signal) -> Result<()> {
+        let process = match self.processes.get_mut(name) {
+            Some(process) => process,
+            None => {
+                bail!("unknown service name {}", name);
+            }
+        };
+
+        if process.pid <= 0 {
+            bail!("service is not running");
+        }
+
+        use nix::unistd::Pid;
+
+        signal::kill(Pid::from_raw(process.pid as i32), signal)?;
 
         Ok(())
     }
@@ -488,6 +514,27 @@ impl Manager {
         }
 
         services
+    }
+
+    fn forget(&mut self, name: &str) -> Result<()> {
+        let process = match self.processes.get_mut(name) {
+            Some(process) => process,
+            None => {
+                bail!("unknown service name {}", name);
+            }
+        };
+
+        if process.target != Target::Down {
+            bail!("service target must be set to `Down`");
+        }
+
+        if process.state == State::Running || process.state == State::Spawned || process.pid > 0 {
+            bail!("service is running");
+        }
+
+        self.processes.remove(name);
+
+        Ok(())
     }
 
     /// process different message types
