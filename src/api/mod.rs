@@ -9,6 +9,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::prelude::*;
 
 use crate::manager::{Handle, State};
+use crate::settings::load;
 
 const SOCKET_NAME: &str = "zinit.socket";
 
@@ -88,6 +89,17 @@ fn forget(args: &[String], handle: Handle) -> Result<Option<String>> {
     Ok(None)
 }
 
+fn monitor(args: &[String], handle: Handle) -> Result<Option<String>> {
+    if args.len() != 1 {
+        bail!("invalid arguments, expecting one argument service name 'forget <service>'")
+    }
+
+    let (name, service) = load(format!("{}.yaml", args[0]))?;
+
+    handle.monitor(name, service)?;
+    Ok(None)
+}
+
 fn process_cmd(handle: Handle, cmd: Vec<String>) -> Result<Option<String>> {
     if cmd.len() == 0 {
         bail!("missing command");
@@ -100,6 +112,7 @@ fn process_cmd(handle: Handle, cmd: Vec<String>) -> Result<Option<String>> {
         "start" => start(&cmd[1..], handle),
         "kill" => kill(&cmd[1..], handle),
         "forget" => forget(&cmd[1..], handle),
+        "monitor" => monitor(&cmd[1..], handle),
         _ => Err(format_err!("unknown command")),
     }
 }

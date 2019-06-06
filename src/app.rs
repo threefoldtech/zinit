@@ -12,7 +12,9 @@ type Result<T> = std::result::Result<T, Error>;
 /// that are defined under the config directory
 pub fn init(config: &str) -> Result<()> {
     // load config
-    let configs = settings::load_dir(config, |file, err| {
+    std::env::set_current_dir(config)?;
+
+    let configs = settings::load_dir(".", |file, err| {
         println!(
             "encountered err {} while loading file {:?}. skipping!",
             err, file
@@ -37,7 +39,9 @@ pub fn init(config: &str) -> Result<()> {
         let handle = manager.run();
 
         for (name, config) in configs.into_iter() {
-            handle.monitor(name, config);
+            if let Err(err) = handle.monitor(name, config) {
+                error!("failed to monitor service: {}", err);
+            }
         }
 
         if let Err(e) = api::run(handle) {

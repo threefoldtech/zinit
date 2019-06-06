@@ -302,6 +302,10 @@ impl Manager {
     fn monitor(&mut self, name: String, service: Service) -> Result<()> {
         service.validate()?;
 
+        if self.processes.contains_key(&name) {
+            bail!("service with name '{}' already monitored", name);
+        }
+
         let can_schedule = self.can_schedule(&service);
 
         let state = match can_schedule {
