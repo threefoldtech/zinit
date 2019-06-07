@@ -33,10 +33,15 @@ fn main() {
                 )
                 .about("run in init mode, start and maintain configured services"),
         )
+        .subcommand(
+            SubCommand::with_name("list")
+                .about("quick view of current known services and their status"),
+        )
         .get_matches();
 
     let result = match matches.subcommand() {
         ("init", Some(matches)) => app::init(matches.value_of("config").unwrap()),
+        ("list", _) => app::list(),
         _ => {
             // TODO: replace with a call to default command
             // this now can be `init` but may be a `status` command

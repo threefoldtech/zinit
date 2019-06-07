@@ -11,7 +11,7 @@ use tokio::prelude::*;
 use crate::manager::{Handle, State};
 use crate::settings::load;
 
-const SOCKET_NAME: &str = "zinit.socket";
+pub const SOCKET_NAME: &str = "zinit.sock";
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -133,28 +133,43 @@ fn process(handle: Handle, socket: UnixStream) {
 
             future::done(result).then(|answer| {
                 let mut buffer = String::new();
-                // Yes, it's intended to look like http header
-                // to support adding more metadata in the future
-                // currently the only header we have is STATUS
-                // also this allow the protocol to be very simply
-                // and human readable at the same time.
-                match answer {
+                let mut content = String::new();
+                // the line protocol is very simple and
+                // kinda looks like http. this will allow
+                // to add extra meta data to the response
+                // later.
+                // the current header we have now are
+                // - status: ok || error
+                // - lines: number of lines of body to read
+                // headers are separated from the content by
+                // 2 empty lines
+                let msg = match answer {
                     Ok(answer) => {
-                        buffer.push_str("STATUS: OK\r\n");
-                        buffer.push_str("\r\n");
+                        content.push_str("status: ok\n");
                         match answer {
-                            Some(answer) => buffer.push_str(&answer),
-                            None => (),
-                        };
+                            Some(answer) => answer,
+                            None => String::new(),
+                        }
                     }
                     Err(err) => {
-                        buffer.push_str("STATUS: ERROR\r\n");
-                        buffer.push_str("\r\n");
-                        buffer.push_str(&format!("{}", err));
+                        content.push_str("status: error\n");
+                        format!("{}", err)
                     }
+                };
+
+                let mut lines = 0;
+                for line in msg.lines() {
+                    lines += 1;
+                    buffer.push_str(&line);
+                    buffer.push('\n');
                 }
 
-                sink.send(buffer)
+                content.push_str(&format!("lines: {}\n", lines));
+                content.push_str("\n\n");
+                content += &buffer;
+                content.pop();
+
+                sink.send(content)
                     .map_err(|e| eprintln!("failed to send answer: {}", e))
             })
         })
