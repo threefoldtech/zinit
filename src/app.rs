@@ -4,6 +4,9 @@ use crate::settings;
 
 use failure::Error;
 use future::lazy;
+use std::io::{self, BufRead};
+use std::os::unix::net;
+use std::path;
 use tokio::prelude::*;
 
 type Result<T> = std::result::Result<T, Error>;
@@ -50,6 +53,19 @@ pub fn init(config: &str) -> Result<()> {
 
         Ok(())
     }));
+
+    Ok(())
+}
+
+pub fn list() -> Result<()> {
+    let p = path::Path::new("/var/run").join(api::SOCKET_NAME);
+    let mut con = net::UnixStream::connect(p)?;
+    con.write_all(b"list\n")?;
+
+    let mut reader = io::BufReader::new(con);
+    for line in reader.lines() {
+        println!("line {:?}", line);
+    }
 
     Ok(())
 }
