@@ -141,7 +141,7 @@ fn process(handle: Handle, socket: UnixStream) {
                 // - status: ok || error
                 // - lines: number of lines of body to read
                 // headers are separated from the content by
-                // 2 empty lines
+                // 1 empty line
                 let msg = match answer {
                     Ok(answer) => {
                         header.push_str("status: ok\n");
