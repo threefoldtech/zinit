@@ -128,7 +128,7 @@ fn main() {
     match result {
         Ok(_) => return,
         Err(e) => {
-            println!("{}", e);
+            eprintln!("{}", e);
             std::process::exit(1);
         }
     }
