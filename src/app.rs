@@ -82,10 +82,6 @@ impl std::str::FromStr for Status {
 
 /// Line protocol implementation
 trait APIProtocol: io::Read + io::Write {
-    fn request(&mut self, cmd: &str) -> Result<String>;
-}
-
-impl APIProtocol for net::UnixStream {
     fn request(&mut self, cmd: &str) -> Result<String> {
         let mut headers = HashMap::new();
         self.write_all(cmd.as_bytes())?;
@@ -131,6 +127,8 @@ impl APIProtocol for net::UnixStream {
     }
 }
 
+impl APIProtocol for net::UnixStream {}
+
 fn connect() -> Result<net::UnixStream> {
     let p = path::Path::new("/var/run").join(api::SOCKET_NAME);
 
@@ -140,55 +138,43 @@ fn connect() -> Result<net::UnixStream> {
 /// list command
 pub fn list() -> Result<()> {
     let mut con = connect()?;
-    let result = con.request("list")?;
-    println!("{}", result);
-    Ok(())
+    con.request("list").map(|result| println!("{}", result))
 }
 
 /// status command
 pub fn status(name: &str) -> Result<()> {
     let mut con = connect()?;
-    let result = con.request(&format!("status {}", name))?;
-    println!("{}", result);
-    Ok(())
+    con.request(&format!("status {}", name))
+        .map(|result| println!("{}", result))
 }
 
 /// stop command
 pub fn stop(name: &str) -> Result<()> {
     let mut con = connect()?;
-    let result = con.request(&format!("stop {}", name))?;
-    println!("{}", result);
-    Ok(())
+    con.request(&format!("stop {}", name)).map(|_| ())
 }
 
 /// start command
 pub fn start(name: &str) -> Result<()> {
     let mut con = connect()?;
-    let result = con.request(&format!("start {}", name))?;
-    println!("{}", result);
-    Ok(())
+    con.request(&format!("start {}", name)).map(|_| ())
 }
 
 /// forget command
 pub fn forget(name: &str) -> Result<()> {
     let mut con = connect()?;
-    let result = con.request(&format!("forget {}", name))?;
-    println!("{}", result);
-    Ok(())
+    con.request(&format!("forget {}", name)).map(|_| ())
 }
 
 /// forget command
 pub fn monitor(name: &str) -> Result<()> {
     let mut con = connect()?;
-    let result = con.request(&format!("monitor {}", name))?;
-    println!("{}", result);
-    Ok(())
+    con.request(&format!("monitor {}", name)).map(|_| ())
 }
 
 /// kill command
 pub fn kill(name: &str, signal: &str) -> Result<()> {
     let mut con = connect()?;
-    let result = con.request(&format!("kill {} {}", name, signal))?;
-    println!("{}", result);
-    Ok(())
+    con.request(&format!("kill {} {}", name, signal))
+        .map(|_| ())
 }
