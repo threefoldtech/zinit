@@ -28,7 +28,7 @@ zinit uses tokio and async io to manage services and processes. The idea is as f
 
 ## Ctrl cycle
 - Start/Stop commands only works on a `monitored` service.
-- On stop, the service target state is set to `down` and then signalled with `SIGTERM`
-> this need to change to support custom events, and also retrying until the service exits.
+- On stop, the service target state is set to `down` and then signalled with `SIGTERM`. The signal can be changed as per configuration
 - On start, the service target state is set to `up` and only re-spawned if it wasn't running.
 - Status/List commands are similar but only read the state flag associated with the service(s).
+- Forgetting a service can be applied only on a 'stopped' service.

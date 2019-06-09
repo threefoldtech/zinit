@@ -18,7 +18,7 @@ fn main() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
 
     let matches = App::new("zinit")
-        .author("Muhamad Azmy, https://github.com/muhamadazmy")
+        .author("ThreeFold Tech, https://github.com/threefoldtech")
         .version("0.1")
         .about("A runit replacement")
         .subcommand(
@@ -66,7 +66,7 @@ fn main() {
                         .required(true)
                         .help("service name"),
                 )
-                .about("start service"),
+                .about("start service. has no effect if the service is already running"),
         )
         .subcommand(
             SubCommand::with_name("forget")
@@ -76,7 +76,7 @@ fn main() {
                         .required(true)
                         .help("service name"),
                 )
-                .about("forget a service. you can only forget a service in `down` status"),
+                .about("forget a service. you can only forget a stopped service"),
         )
         .subcommand(
             SubCommand::with_name("monitor")
@@ -103,7 +103,7 @@ fn main() {
                         .default_value("SIGTERM")
                         .help("signal name (example: SIGTERM)"),
                 )
-                .about("start monitoring a service. configuration is loaded from server config directory"),
+                .about("send a signal to a running service."),
         )
         .get_matches();
 
