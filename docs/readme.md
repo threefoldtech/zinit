@@ -17,7 +17,8 @@ oneshot: true or false (false by default)
 after: # list of services that we depend on (optional)
    - service1_name
    - service2_name
-
+signal: # optional section
+  stop: SIGKILL # the signal sent on `stop` action. default to SIGTERM
 ``` 
 
 - `oneshot` service is not going to re-spawn when it exits.
@@ -25,6 +26,8 @@ after: # list of services that we depend on (optional)
 - if a service depends on another service (that is not `oneshot`), it will not get started, unless the service is marked as `running`
 - a service with no test command is marked running if it successfully executed, regardless if it exits immediately after or not, hence a test command is useful.
 - If a test command is provided, the service will not consider running, unless the test command pass
+- You can override the stop signal sent to the service as shown in the example. Currently only the stop
+  signal can be overwritten. More signal types might be added in the future (for example, reload).
 
 #### Examples
 redis-init.yaml
@@ -48,3 +51,44 @@ oneshot: true
 after:
   - redis
 ```
+
+## Controlling commands
+```bash
+zinit --help
+```
+
+```
+zinit 0.1
+ThreeFold Tech, https://github.com/threefoldtech
+A runit replacement
+
+USAGE:
+    zinit [SUBCOMMAND]
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+SUBCOMMANDS:
+    forget     forget a service. you can only forget a stopped service
+    help       Prints this message or the help of the given subcommand(s)
+    init       run in init mode, start and maintain configured services
+    kill       send a signal to a running service.
+    list       quick view of current known services and their status
+    monitor    start monitoring a service. configuration is loaded from server config directory
+    start      start service. has no effect if the service is already running
+    status     show detailed service status
+    stop       stop service
+
+```
+
+As already described above, once zinit starts in init mode, it auto monitor all services configured under the provided configuration directory. Once a service is 'monitored' you can control it with one of the following commands.
+
+- `kill`: Similar to the unix `kill` command, it sends a signal to a named service (default to `sigterm`). If the signal terminates the service, `zinit` will auto start it since the service target state is still `up`
+- `stop`: Stop sets the target state of the service to `down`, and send the `stop` signal. The stop signal is defaulted to `sigterm` but can be overwritten in the service configuration file. A `stop` action doesn't wait for the service to exit nor grantee that it's killed. It grantees that once the service is down, it won't re-spawn. A caller to the `stop` action can poll on the service state until it's down, or decide to send another signal (for example `kill <service> SIGKILL`) to fully stop it.
+- `start`: start is the opposite of `stop`. it will set the target state to `up` and will re-spawn the service if it's not already running.
+- `status`: shows detailed status of a named service.
+- `forget`: works only on a `stopped` service (means that the target state is set to `down` by a previous call to `stop`). Also no process must be associated with the service (if the `stop` call didn't do it, a `kill` might)
+- `list`: show a quick view of all monitored services.
+- `monitor`: monitor will load config of a service `name` from the configuration directory. and monitor it, this will allow you to add new
+service to the configuration directory in runtime.
