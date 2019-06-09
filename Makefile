@@ -1,3 +1,5 @@
+default: release
+
 docker: release
 	docker build -f Dockerfile -t zinit target/release
 
