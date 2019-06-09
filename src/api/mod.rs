@@ -132,8 +132,7 @@ fn process(handle: Handle, socket: UnixStream) {
             };
 
             future::done(result).then(|answer| {
-                let mut buffer = String::new();
-                let mut content = String::new();
+                let mut header = String::new();
                 // the line protocol is very simple and
                 // kinda looks like http. this will allow
                 // to add extra meta data to the response
@@ -145,35 +144,27 @@ fn process(handle: Handle, socket: UnixStream) {
                 // 2 empty lines
                 let msg = match answer {
                     Ok(answer) => {
-                        content.push_str("status: ok\n");
+                        header.push_str("status: ok\n");
                         match answer {
                             Some(answer) => answer,
                             None => String::new(),
                         }
                     }
                     Err(err) => {
-                        content.push_str("status: error\n");
+                        header.push_str("status: error\n");
                         format!("{}", err)
                     }
                 };
 
-                let mut lines = 0;
-                for line in msg.lines() {
-                    lines += 1;
-                    buffer.push_str(&line);
-                    buffer.push('\n');
-                }
+                let lines = msg.lines().count();
 
-                content.push_str(&format!("lines: {}\n", lines));
-                content.push_str("\n\n");
-                content += &buffer;
-                content.pop();
-
-                sink.send(content)
+                header.push_str(&format!("lines: {}\n", lines));
+                sink.send(header)
+                    .and_then(|sink| sink.send(msg))
                     .map_err(|e| eprintln!("failed to send answer: {}", e))
             })
         })
-        .map(|_| println!("end of stream"));
+        .map(|_| ());
 
     tokio::spawn(future);
 }
