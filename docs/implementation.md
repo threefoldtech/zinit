@@ -32,3 +32,8 @@ zinit uses tokio and async io to manage services and processes. The idea is as f
 - On start, the service target state is set to `up` and only re-spawned if it wasn't running.
 - Status/List commands are similar but only read the state flag associated with the service(s).
 - Forgetting a service can be applied only on a 'stopped' service.
+
+## How ctrl commands work
+Once zinit start in `init` mode, it listens on a unix socket under the location `/var/run/zinit.sock`. The API implements a line protocol, so you can connect to this socket (if you have permissions) and type the commands manually. the response is human readable.
+
+For convenience, `zinit` provides a command line interface that connects to this socket and provide a well documented command line interface. Also clean up the protocol overhead data. Please check the [readme](readme.md) for how to use.
