@@ -28,9 +28,22 @@ impl Default for Signal {
         }
     }
 }
+#[serde(rename_all = "lowercase")]
+#[derive(Clone, Debug, Deserialize)]
+pub enum Log {
+    Null,
+    Ring,
+    Stdout,
+}
+
+impl Default for Log {
+    fn default() -> Self {
+        Log::Ring
+    }
+}
 
 #[serde(default)]
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Service {
     /// command to run
     pub exec: String,
@@ -39,8 +52,10 @@ pub struct Service {
     pub test: String,
     #[serde(rename = "oneshot")]
     pub one_shot: bool,
+    //pub env: HashMap<String, String>,
     pub after: Vec<String>,
     pub signal: Signal,
+    pub log: Log,
 }
 
 impl Service {

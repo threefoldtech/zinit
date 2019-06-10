@@ -1,7 +1,9 @@
+use crate::settings::Log;
 use failure::Error;
 use nix::sys::wait::{self, WaitStatus};
 use std::collections::HashMap;
-use std::process::Command;
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
 use tokio::sync::oneshot::{self, Sender};
@@ -75,7 +77,9 @@ impl ProcessManager {
     /// creates a child process future from command line
     pub fn child(
         &mut self,
+        id: String,
         cmd: String,
+        log: Log,
     ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
         let args = match shlex::split(&cmd) {
             Some(args) => args,
@@ -87,6 +91,30 @@ impl ProcessManager {
         }
 
         let mut cmd = Command::new(&args[0]);
+        let cmd = match log {
+            Log::Stdout => &mut cmd,
+            Log::Null => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
+            Log::Ring => {
+                let awk = Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("while read line; do echo '{}:' $line; done", id))
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::from(
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .open("/dev/kmsg")?,
+                    ))
+                    .spawn()?;
+
+                let pipe = awk
+                    .stdin
+                    .ok_or(format_err!("failed to open logging pipe"))?;
+                let fd = pipe.as_raw_fd();
+                cmd.stdout(pipe).stderr(unsafe { Stdio::from_raw_fd(fd) })
+            }
+        };
+
         let cmd = cmd.args(&args[1..]);
 
         self.cmd(cmd)
