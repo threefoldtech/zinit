@@ -80,8 +80,8 @@ enum Message {
     Exit(String, WaitStatus),
     /// State message sets the service state to the given value
     State(String, State),
-    /// ReSpawn a service after exit
-    ReSpawn(String),
+    /// Spawn a service after exit
+    Spawn(String),
 }
 
 pub struct Handle {
@@ -298,6 +298,15 @@ impl Manager {
         can
     }
 
+    fn spawn(&mut self, name: String) {
+        let tx = self.tx.clone();
+        tokio::spawn(
+            tx.send(Message::Spawn(name))
+                .map(|_| ())
+                .map_err(|e| error!("failed to spawn service: {}", e)),
+        );
+    }
+
     /// handle the monitor message
     fn monitor(&mut self, name: String, service: Service) -> Result<()> {
         service.validate()?;
@@ -318,14 +327,14 @@ impl Manager {
 
         // we can start this service immediately
         if can_schedule {
-            self.exec(name);
+            self.spawn(name);
         }
 
         Ok(())
     }
 
     /// handle the re-spawn message
-    fn on_re_spawn(&mut self, name: String) {
+    fn os_spawn(&mut self, name: String) {
         // the re-spawn message will check the target
         // service state, and only actually re-spawn if the target
         // is up.
@@ -335,9 +344,12 @@ impl Manager {
             None => return,
         };
 
-        match process.target {
-            Target::Up => self.exec(name),
-            Target::Down => return,
+        match process.state {
+            State::Running | State::Spawned => return,
+            _ => match process.target {
+                Target::Up => self.exec(name),
+                Target::Down => return,
+            },
         }
     }
 
@@ -379,7 +391,7 @@ impl Manager {
         }
 
         for name in to_schedule {
-            self.exec(name);
+            self.spawn(name);
         }
     }
 
@@ -418,7 +430,7 @@ impl Manager {
         let now = Instant::now() + Duration::from_secs(1);
         let f = timer::Delay::new(now)
             .map_err(|_| panic!("timer failed"))
-            .and_then(move |_| tx.send(Message::ReSpawn(name)))
+            .and_then(move |_| tx.send(Message::Spawn(name)))
             .map(|_| ())
             .map_err(|_| ());
 
@@ -479,7 +491,7 @@ impl Manager {
 
         // start a service by name
         // 1- we need to set the required state of a service
-        // 2- we need to exec the service if it's not already running
+        // 2- we need to spawn the service if it's not already running
         let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
@@ -488,10 +500,7 @@ impl Manager {
         };
 
         process.target = Target::Up;
-        match process.state {
-            State::Running | State::Spawned => (),
-            _ => self.exec(String::from(name)),
-        }
+        self.spawn(String::from(name));
 
         Ok(())
     }
@@ -551,7 +560,7 @@ impl Manager {
     fn process(&mut self, msg: Message) {
         match msg {
             Message::Exit(name, status) => self.on_exit(name, status),
-            Message::ReSpawn(name) => self.on_re_spawn(name),
+            Message::Spawn(name) => self.os_spawn(name),
             Message::State(name, state) => self.on_state(name, state),
             //_ => println!("Unhandled message {:?}", msg),
         }
