@@ -31,7 +31,6 @@ impl Default for Signal {
 #[serde(rename_all = "lowercase")]
 #[derive(Clone, Debug, Deserialize)]
 pub enum Log {
-    Null,
     Ring,
     Stdout,
 }

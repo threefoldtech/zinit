@@ -93,7 +93,6 @@ impl ProcessManager {
         let mut cmd = Command::new(&args[0]);
         let cmd = match log {
             Log::Stdout => &mut cmd,
-            Log::Null => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
             Log::Ring => {
                 let awk = Command::new("sh")
                     .arg("-c")
