@@ -19,6 +19,7 @@ after: # list of services that we depend on (optional)
    - service2_name
 signal: # optional section
   stop: SIGKILL # the signal sent on `stop` action. default to SIGTERM
+log: null | ring | stdout
 ``` 
 
 - `oneshot` service is not going to re-spawn when it exits.
@@ -28,6 +29,15 @@ signal: # optional section
 - If a test command is provided, the service will not consider running, unless the test command pass
 - You can override the stop signal sent to the service as shown in the example. Currently only the stop
   signal can be overwritten. More signal types might be added in the future (for example, reload).
+- the log directive can be set to one of the following values
+  - `null`: ignore all service logs (like `> /dev/null`)
+  - `ring`: the default value, which means all logs of the service is written to the kernel ring buffer. The name is service is prepended to the log line.
+  - `stdout`: print the output on zinit stdout
+
+> Note: to use `ring` inside docker make sure you add the `kmsg` device to the list of allowed devices
+```
+docker run -dt --device=/dev/kmsg:/dev/kmsg:wm zinit
+```
 
 #### Examples
 redis-init.yaml

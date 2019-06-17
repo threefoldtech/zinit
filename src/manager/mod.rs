@@ -7,7 +7,7 @@ use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
 
-use crate::settings::Service;
+use crate::settings::{self, Service};
 
 mod pm;
 use pm::WaitStatusExt;
@@ -156,7 +156,7 @@ impl Manager {
     /// with delays 250*trial number ms in between.
     /// so the delay is 0 250 500 750 1000 1250 for a total delay of 3750 ms before
     /// the service is set to "test failed" state.
-    fn tester(&mut self, cmd: String) -> impl Future<Item = (), Error = ()> {
+    fn tester(&mut self, id: String, cmd: String) -> impl Future<Item = (), Error = ()> {
         use std::time::{Duration, Instant};
         if cmd.is_empty() {
             return future::Either::A(future::ok(()));
@@ -165,15 +165,22 @@ impl Manager {
         let table = Arc::clone(&self.pm);
         let tester = stream::iter_ok(0..5) //try 5 times (configurable ?)
             .for_each(move |i| {
+                let id = id.clone();
                 let cmd = cmd.clone();
                 let table = Arc::clone(&table);
                 // wait 250 ms between trials (configurable ?)
                 let deadline = Instant::now() + Duration::from_millis(i * 250);
                 timer::Delay::new(deadline)
                     .map_err(|e| format_err!("{}", e))
-                    .and_then(move |_| match table.lock().unwrap().child(cmd) {
-                        Ok((_, child)) => future::Either::A(child),
-                        Err(err) => future::Either::B(future::err(err)),
+                    .and_then(move |_| {
+                        match table.lock().unwrap().child(
+                            format!("{}/test", id),
+                            cmd,
+                            settings::Log::Ring,
+                        ) {
+                            Ok((_, child)) => future::Either::A(child),
+                            Err(err) => future::Either::B(future::err(err)),
+                        }
                     })
                     .then(|exit| {
                         if match exit {
@@ -214,10 +221,11 @@ impl Manager {
         process.state = State::Spawned;
         let exec = process.config.exec.clone();
         let test = process.config.test.clone();
+        let log = process.config.log.clone();
         drop(process);
 
         let service = name.clone();
-        let child = match self.pm.lock().unwrap().child(exec) {
+        let child = match self.pm.lock().unwrap().child(name.clone(), exec, log) {
             Ok((pid, child)) => {
                 // update the process pid
                 let mut process = self.processes.get_mut(&name).unwrap();
@@ -253,7 +261,7 @@ impl Manager {
 
         let tx = self.tx.clone();
         let tester = self
-            .tester(test)
+            .tester(name.clone(), test)
             .then(|result| {
                 // the tester is the only entity that can change service
                 // state to Running, or TestError
