@@ -3,6 +3,7 @@ use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::u64::MAX;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
@@ -137,6 +138,7 @@ pub struct Manager {
     processes: HashMap<String, Process>,
     tx: MessageSender,
     rx: Option<MessageReceiver>,
+    testers: Arc<Mutex<HashMap<String, ()>>>,
 }
 
 impl Manager {
@@ -149,13 +151,15 @@ impl Manager {
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),
+            testers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// tester will create a tester future that tries to run the given command 5 times
+    /// tester will create a tester future that tries to run the given test command
     /// with delays 250*trial number ms in between.
-    /// so the delay is 0 250 500 750 1000 1250 for a total delay of 3750 ms before
-    /// the service is set to "test failed" state.
+    /// so the delay is 0 250 500 750 1000 1250 for a max delay of 2 seconds.
+    /// The test will keep retrying until the test succeed, or the service is marked
+    /// as Down.
     fn tester(&mut self, id: String, cmd: String) -> impl Future<Item = (), Error = ()> {
         use std::time::{Duration, Instant};
         if cmd.is_empty() {
@@ -163,14 +167,27 @@ impl Manager {
         }
 
         let table = Arc::clone(&self.pm);
-        let tester = stream::iter_ok(0..5) //try 5 times (configurable ?)
+        let testers = Arc::clone(&self.testers);
+        let tester = stream::iter_ok(0..MAX) //try almost forever before giving up
             .for_each(move |i| {
                 let id = id.clone();
+                let testers = Arc::clone(&testers);
+                if let None = testers.lock().unwrap().get(&id) {
+                    // the test is not register anymore
+                    // we need to break the loop
+                    return future::Either::B(future::err(()));
+                }
+
                 let cmd = cmd.clone();
                 let table = Arc::clone(&table);
-                // wait 250 ms between trials (configurable ?)
-                let deadline = Instant::now() + Duration::from_millis(i * 250);
-                timer::Delay::new(deadline)
+
+                let mut ms = i * 250;
+                if ms > 2000 {
+                    // max wait of 2 seconds between tests.
+                    ms = 2000;
+                }
+                let deadline = Instant::now() + Duration::from_millis(ms);
+                let delayed = timer::Delay::new(deadline)
                     .map_err(|e| format_err!("{}", e))
                     .and_then(move |_| {
                         match table.lock().unwrap().child(
@@ -196,7 +213,9 @@ impl Manager {
                         // which means try again, so we return this
                         // if the test command fails!
                         Ok(())
-                    })
+                    });
+
+                future::Either::A(delayed)
             })
             // this confusing block will flip the result of this
             // future ok => err and err => ok the reason we do
@@ -260,9 +279,11 @@ impl Manager {
         tokio::spawn(child);
 
         let tx = self.tx.clone();
+        let service = name.clone();
+        let testers = Arc::clone(&self.testers);
         let tester = self
             .tester(name.clone(), test)
-            .then(|result| {
+            .then(move |result| {
                 // the tester is the only entity that can change service
                 // state to Running, or TestError
                 // it means that we can safely assume the Running
@@ -274,13 +295,25 @@ impl Manager {
                     Ok(_) => State::Running,
                     Err(_) => State::TestError,
                 };
-
-                tx.send(Message::State(name, state))
+                // clear the testers map
+                testers.lock().unwrap().remove(&service);
+                tx.send(Message::State(service, state))
             })
             .map(|_| ())
             .map_err(|_| ());
 
-        tokio::spawn(tester);
+        //TODO: make sure there is no NO other tester running already for this process
+        //since testers now never exit until they succeed, waiting a max of 2 seconds
+        //between testing. We need to make sure if a daemon fail, (while it's tester loop never exited)
+        //that we don't start another tester loop.
+        let mut testers = self.testers.lock().unwrap();
+        match testers.get(&name) {
+            Some(_) => (),
+            None => {
+                testers.insert(name, ());
+                tokio::spawn(tester);
+            }
+        }
     }
 
     fn can_schedule(&self, service: &Service) -> bool {
@@ -449,7 +482,8 @@ impl Manager {
     fn stop(&mut self, name: &str) -> Result<()> {
         // stop a service by name
         // 1- we need to set the required target of a service
-        // 2- we need to signal the service to stop
+        // 2- make sure no running testers for this service
+        // 3- we need to signal the service to stop
         let process = match self.processes.get_mut(name) {
             Some(process) => process,
             None => {
@@ -457,9 +491,11 @@ impl Manager {
             }
         };
 
+        // make sure no tests are running for this service
+        self.testers.lock().unwrap().remove(name);
+
         process.target = Target::Down;
         if process.pid <= 0 {
-            debug!("service '{}' is not running, skipping kill", name);
             return Ok(());
         }
 
