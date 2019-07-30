@@ -302,10 +302,11 @@ impl Manager {
             .map(|_| ())
             .map_err(|_| ());
 
-        //TODO: make sure there is no NO other tester running already for this process
-        //since testers now never exit until they succeed, waiting a max of 2 seconds
-        //between testing. We need to make sure if a daemon fail, (while it's tester loop never exited)
-        //that we don't start another tester loop.
+        // since testers now never exit until they succeed, waiting a max of 2 seconds
+        // between testing. We need to make sure if a daemon fail, (while it's tester loop never exited)
+        // that we don't start another tester loop.
+        // hence, we make sure we mark running tests in the testers map. the map also works as a flag
+        // for the test loop itself, if the loop can't find a flag for it's id, it will exit.
         let mut testers = self.testers.lock().unwrap();
         match testers.get(&name) {
             Some(_) => (),
