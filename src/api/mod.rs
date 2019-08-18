@@ -4,11 +4,11 @@ use nix::sys::signal;
 use ringlog::RingLog;
 use shlex;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{fs, path};
 use tokio::codec::{Framed, LinesCodec};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::prelude::*;
-use std::sync::Arc;
 
 use crate::manager::{Handle, State};
 use crate::settings::load;
@@ -191,8 +191,7 @@ pub fn run(handle: Handle) -> Result<()> {
     Ok(())
 }
 
-pub fn logd(log: Arc<RingLog>) -> Result<()>
-{
+pub fn logd(log: Arc<RingLog>) -> Result<()> {
     let p = path::Path::new("/var/run");
     fs::create_dir_all(p)?;
     let p = p.join(RINGLOG_NAME);

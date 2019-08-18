@@ -4,13 +4,13 @@ use crate::settings;
 
 use failure::Error;
 use future::lazy;
+use ringlog::RingLog;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::os::unix::net;
 use std::path;
-use tokio::prelude::*;
-use ringlog::RingLog;
 use std::sync::Arc;
+use tokio::prelude::*;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -186,4 +186,16 @@ pub fn kill(name: &str, signal: &str) -> Result<()> {
     let mut con = connect()?;
     con.request(&format!("kill {} {}", name, signal))
         .map(|_| ())
+}
+
+/// log command
+pub fn log() -> Result<()> {
+    let p = path::Path::new("/var/run").join(api::RINGLOG_NAME);
+
+    let mut sock = net::UnixStream::connect(p)?;
+    let mut stdout = io::stdout();
+
+    io::copy(&mut sock, &mut stdout)?;
+
+    Ok(())
 }

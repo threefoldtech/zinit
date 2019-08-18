@@ -1,13 +1,13 @@
 use failure::Error;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
+use ringlog::RingLog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::u64::MAX;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
-use ringlog::RingLog;
 
 use crate::settings::{self, Service};
 

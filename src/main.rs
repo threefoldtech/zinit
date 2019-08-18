@@ -97,6 +97,10 @@ fn main() {
                 .about("start monitoring a service. configuration is loaded from server config directory"),
         )
         .subcommand(
+            SubCommand::with_name("log")
+                .about("view services logs from zinit ring buffer"),
+        )
+        .subcommand(
             SubCommand::with_name("kill")
                 .arg(
                     Arg::with_name("service")
@@ -122,6 +126,7 @@ fn main() {
             matches.is_present("debug"),
         ),
         ("list", _) => app::list(),
+        ("log", _) => app::log(),
         ("status", Some(matches)) => app::status(matches.value_of("service").unwrap()),
         ("stop", Some(matches)) => app::stop(matches.value_of("service").unwrap()),
         ("start", Some(matches)) => app::start(matches.value_of("service").unwrap()),
