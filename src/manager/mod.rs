@@ -7,6 +7,7 @@ use std::u64::MAX;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
+use ringlog::RingLog;
 
 use crate::settings::{self, Service};
 
@@ -143,11 +144,11 @@ pub struct Manager {
 
 impl Manager {
     /// creates a new manager instance
-    pub fn new() -> Self {
+    pub fn new(log: Arc<RingLog>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
-            pm: Arc::new(Mutex::new(pm::ProcessManager::new())),
+            pm: Arc::new(Mutex::new(pm::ProcessManager::new(log))),
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),

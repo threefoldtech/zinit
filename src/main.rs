@@ -31,6 +31,14 @@ fn main() {
                         .help("service configurations directory")
                         .default_value("/etc/zinit/"),
                 )
+                .arg(
+                    Arg::with_name("buffer")
+                    .value_name("BUFFER")
+                    .short("b")
+                    .long("buffer")
+                    .help("buffer size (in lines) to keep services logs")
+                    .default_value("2000")
+                )
                 .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
                 .about("run in init mode, start and maintain configured services"),
         )
@@ -109,6 +117,7 @@ fn main() {
 
     let result = match matches.subcommand() {
         ("init", Some(matches)) => app::init(
+            matches.value_of("buffer").unwrap().parse().unwrap(),
             matches.value_of("config").unwrap(),
             matches.is_present("debug"),
         ),

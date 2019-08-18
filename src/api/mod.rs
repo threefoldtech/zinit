@@ -1,17 +1,20 @@
 use failure::Error;
 use future;
 use nix::sys::signal;
+use ringlog::RingLog;
 use shlex;
 use std::str::FromStr;
 use std::{fs, path};
 use tokio::codec::{Framed, LinesCodec};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::prelude::*;
+use std::sync::Arc;
 
 use crate::manager::{Handle, State};
 use crate::settings::load;
 
 pub const SOCKET_NAME: &str = "zinit.sock";
+pub const RINGLOG_NAME: &str = "log.sock";
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -181,6 +184,26 @@ pub fn run(handle: Handle) -> Result<()> {
         .for_each(move |socket| {
             let handle = handle.clone();
             process(handle, socket);
+            Ok(())
+        });
+
+    tokio::spawn(server);
+    Ok(())
+}
+
+pub fn logd(log: Arc<RingLog>) -> Result<()>
+{
+    let p = path::Path::new("/var/run");
+    fs::create_dir_all(p)?;
+    let p = p.join(RINGLOG_NAME);
+    let _ = fs::remove_file(&p);
+
+    let server = UnixListener::bind(p)?
+        .incoming()
+        .map_err(|e| error!("accept err: {}", e))
+        .for_each(move |socket| {
+            let d = log.as_ref();
+            tokio::spawn(d.sink(socket));
             Ok(())
         });
 

@@ -9,12 +9,14 @@ use std::io::{self, BufRead};
 use std::os::unix::net;
 use std::path;
 use tokio::prelude::*;
+use ringlog::RingLog;
+use std::sync::Arc;
 
 type Result<T> = std::result::Result<T, Error>;
 
 /// init start init command, immediately monitor all services
 /// that are defined under the config directory
-pub fn init(config: &str, debug: bool) -> Result<()> {
+pub fn init(buffer: usize, config: &str, debug: bool) -> Result<()> {
     // load config
     if !debug && std::process::id() != 1 {
         bail!("can only run as pid 1");
@@ -30,14 +32,16 @@ pub fn init(config: &str, debug: bool) -> Result<()> {
         settings::Walk::Continue
     })?;
 
+    let log = Arc::new(RingLog::new(buffer));
+
     // start the tokio runtime, start the process manager
     // and monitor all configured services
     // TODO:
     // We need to start the unix socket server that will
     // receive and handle user management commands (start, stop, status, etc...)
-    tokio::run(lazy(|| {
+    tokio::run(lazy(move || {
         // creating a new instance from the process manager
-        let manager = manager::Manager::new();
+        let manager = manager::Manager::new(Arc::clone(&log));
 
         // running the manager returns a handle that we can
         // use to actually control the process manager
@@ -51,7 +55,12 @@ pub fn init(config: &str, debug: bool) -> Result<()> {
                 error!("failed to monitor service: {}", err);
             }
         }
+        // start ring buffer server
+        if let Err(e) = api::logd(Arc::clone(&log)) {
+            error!("failed to start ring buffer server: {}", e)
+        }
 
+        // start management API
         if let Err(e) = api::run(handle) {
             error!("failed to start ctrl api {}", e);
         }
