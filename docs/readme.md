@@ -20,7 +20,7 @@ after: # list of services that we depend on (optional)
 signal: # optional section
   stop: SIGKILL # the signal sent on `stop` action. default to SIGTERM
 log: null | ring | stdout
-``` 
+```
 
 - `oneshot` service is not going to re-spawn when it exits.
 - if a service depends on a `oneshot` services, it will not get started, unless the oneshot service exits with success.
@@ -85,6 +85,7 @@ SUBCOMMANDS:
     init       run in init mode, start and maintain configured services
     kill       send a signal to a running service.
     list       quick view of current known services and their status
+    log        view services logs from zinit ring buffer
     monitor    start monitoring a service. configuration is loaded from server config directory
     start      start service. has no effect if the service is already running
     status     show detailed service status
@@ -100,5 +101,6 @@ As already described above, once zinit starts in init mode, it auto monitor all 
 - `status`: shows detailed status of a named service.
 - `forget`: works only on a `stopped` service (means that the target state is set to `down` by a previous call to `stop`). Also no process must be associated with the service (if the `stop` call didn't do it, a `kill` might)
 - `list`: show a quick view of all monitored services.
+- `log`: show services logs from the zinit ring buffer. The buffer size is configured in `init`
 - `monitor`: monitor will load config of a service `name` from the configuration directory. and monitor it, this will allow you to add new
 service to the configuration directory in runtime.
