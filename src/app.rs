@@ -189,13 +189,39 @@ pub fn kill(name: &str, signal: &str) -> Result<()> {
 }
 
 /// log command
-pub fn log() -> Result<()> {
+pub fn log(filter: Option<&str>) -> Result<()> {
     let p = path::Path::new("/var/run").join(api::RINGLOG_NAME);
 
     let mut sock = net::UnixStream::connect(p)?;
     let mut stdout = io::stdout();
 
-    io::copy(&mut sock, &mut stdout)?;
+    match filter {
+        None => {
+            io::copy(&mut sock, &mut stdout)?;
+        }
+        Some(filter) => {
+            let mut buf = io::BufReader::new(sock);
+            let mut line = String::new();
+            let filter = format!("{}:", filter);
+            loop {
+                if buf.read_line(&mut line)? == 0 {
+                    // EOF
+                    break;
+                }
+
+                if line.len() <= 4 {
+                    //we expect a line with prefix `[?] <name>:
+                    continue;
+                }
+
+                if line[4..].starts_with(&filter) {
+                    stdout.write(line.as_bytes())?;
+                }
+                
+                line.truncate(0);
+            }
+        }
+    }
 
     Ok(())
 }

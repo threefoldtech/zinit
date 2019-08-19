@@ -98,6 +98,12 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("log")
+                .arg(
+                    Arg::with_name("filter")
+                        .value_name("FILTER")
+                        .required(false)
+                        .help("an optional 'exact' service name")
+                )
                 .about("view services logs from zinit ring buffer"),
         )
         .subcommand(
@@ -126,7 +132,7 @@ fn main() {
             matches.is_present("debug"),
         ),
         ("list", _) => app::list(),
-        ("log", _) => app::log(),
+        ("log", Some(matches)) => app::log(matches.value_of("filter")),
         ("status", Some(matches)) => app::status(matches.value_of("service").unwrap()),
         ("stop", Some(matches)) => app::stop(matches.value_of("service").unwrap()),
         ("start", Some(matches)) => app::start(matches.value_of("service").unwrap()),
