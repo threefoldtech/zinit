@@ -1,6 +1,7 @@
 use failure::Error;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
+use ringlog::RingLog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::u64::MAX;
@@ -143,11 +144,11 @@ pub struct Manager {
 
 impl Manager {
     /// creates a new manager instance
-    pub fn new() -> Self {
+    pub fn new(log: Arc<RingLog>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
         Manager {
-            pm: Arc::new(Mutex::new(pm::ProcessManager::new())),
+            pm: Arc::new(Mutex::new(pm::ProcessManager::new(log))),
             processes: HashMap::new(),
             tx: tx,
             rx: Some(rx),

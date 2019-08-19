@@ -31,6 +31,14 @@ fn main() {
                         .help("service configurations directory")
                         .default_value("/etc/zinit/"),
                 )
+                .arg(
+                    Arg::with_name("buffer")
+                    .value_name("BUFFER")
+                    .short("b")
+                    .long("buffer")
+                    .help("buffer size (in lines) to keep services logs")
+                    .default_value("2000")
+                )
                 .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
                 .about("run in init mode, start and maintain configured services"),
         )
@@ -89,6 +97,16 @@ fn main() {
                 .about("start monitoring a service. configuration is loaded from server config directory"),
         )
         .subcommand(
+            SubCommand::with_name("log")
+                .arg(
+                    Arg::with_name("filter")
+                        .value_name("FILTER")
+                        .required(false)
+                        .help("an optional 'exact' service name")
+                )
+                .about("view services logs from zinit ring buffer"),
+        )
+        .subcommand(
             SubCommand::with_name("kill")
                 .arg(
                     Arg::with_name("service")
@@ -109,10 +127,12 @@ fn main() {
 
     let result = match matches.subcommand() {
         ("init", Some(matches)) => app::init(
+            matches.value_of("buffer").unwrap().parse().unwrap(),
             matches.value_of("config").unwrap(),
             matches.is_present("debug"),
         ),
         ("list", _) => app::list(),
+        ("log", Some(matches)) => app::log(matches.value_of("filter")),
         ("status", Some(matches)) => app::status(matches.value_of("service").unwrap()),
         ("stop", Some(matches)) => app::stop(matches.value_of("service").unwrap()),
         ("start", Some(matches)) => app::start(matches.value_of("service").unwrap()),

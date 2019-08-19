@@ -4,17 +4,19 @@ use crate::settings;
 
 use failure::Error;
 use future::lazy;
+use ringlog::RingLog;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::os::unix::net;
 use std::path;
+use std::sync::Arc;
 use tokio::prelude::*;
 
 type Result<T> = std::result::Result<T, Error>;
 
 /// init start init command, immediately monitor all services
 /// that are defined under the config directory
-pub fn init(config: &str, debug: bool) -> Result<()> {
+pub fn init(buffer: usize, config: &str, debug: bool) -> Result<()> {
     // load config
     if !debug && std::process::id() != 1 {
         bail!("can only run as pid 1");
@@ -30,14 +32,16 @@ pub fn init(config: &str, debug: bool) -> Result<()> {
         settings::Walk::Continue
     })?;
 
+    let log = Arc::new(RingLog::new(buffer));
+
     // start the tokio runtime, start the process manager
     // and monitor all configured services
     // TODO:
     // We need to start the unix socket server that will
     // receive and handle user management commands (start, stop, status, etc...)
-    tokio::run(lazy(|| {
+    tokio::run(lazy(move || {
         // creating a new instance from the process manager
-        let manager = manager::Manager::new();
+        let manager = manager::Manager::new(Arc::clone(&log));
 
         // running the manager returns a handle that we can
         // use to actually control the process manager
@@ -51,7 +55,12 @@ pub fn init(config: &str, debug: bool) -> Result<()> {
                 error!("failed to monitor service: {}", err);
             }
         }
+        // start ring buffer server
+        if let Err(e) = api::logd(Arc::clone(&log)) {
+            error!("failed to start ring buffer server: {}", e)
+        }
 
+        // start management API
         if let Err(e) = api::run(handle) {
             error!("failed to start ctrl api {}", e);
         }
@@ -177,4 +186,42 @@ pub fn kill(name: &str, signal: &str) -> Result<()> {
     let mut con = connect()?;
     con.request(&format!("kill {} {}", name, signal))
         .map(|_| ())
+}
+
+/// log command
+pub fn log(filter: Option<&str>) -> Result<()> {
+    let p = path::Path::new("/var/run").join(api::RINGLOG_NAME);
+
+    let mut sock = net::UnixStream::connect(p)?;
+    let mut stdout = io::stdout();
+
+    match filter {
+        None => {
+            io::copy(&mut sock, &mut stdout)?;
+        }
+        Some(filter) => {
+            let mut buf = io::BufReader::new(sock);
+            let mut line = String::new();
+            let filter = format!("{}:", filter);
+            loop {
+                if buf.read_line(&mut line)? == 0 {
+                    // EOF
+                    break;
+                }
+
+                if line.len() <= 4 {
+                    //we expect a line with prefix `[?] <name>:
+                    continue;
+                }
+
+                if line[4..].starts_with(&filter) {
+                    stdout.write(line.as_bytes())?;
+                }
+                
+                line.truncate(0);
+            }
+        }
+    }
+
+    Ok(())
 }
