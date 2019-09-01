@@ -1,7 +1,7 @@
 > Work in progress
 this repository is heavly under development and is still not usable at the moment. We still trying to figure out the basic optimum structure for the process manager
 
-# zinit
+# zinit [![Actions Status](https://github.com/threefoldtech/zosv2/workflows/Rust/badge.svg)](https://github.com/threefoldtech/zinit/actions)
 A POC PID 1 replacement that feels like runit written in rust+tokio
 
 ## Goal
