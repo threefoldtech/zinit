@@ -580,7 +580,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "ringlogd"
 version = "0.1.0"
-source = "git+https://github.com/threefoldtech/ringlogd#896f2b81073f7af0d3c9ef3830747a3eee56f4c1"
+source = "git+https://github.com/threefoldtech/ringlogd#2d49c9eb481549997f53234e1ba7e54e62d5ea74"
 dependencies = [
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
