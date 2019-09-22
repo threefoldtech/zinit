@@ -163,7 +163,10 @@ fn process(handle: Handle, socket: UnixStream) {
 
                 header.push_str(&format!("lines: {}\n", lines));
                 sink.send(header)
-                    .and_then(|sink| sink.send(msg))
+                    .and_then(|sink| match msg.len() {
+                        0 => future::Either::A(future::ok(sink)),
+                        _ => future::Either::B(sink.send(msg)),
+                    })
                     .map_err(|e| eprintln!("failed to send answer: {}", e))
             })
         })
