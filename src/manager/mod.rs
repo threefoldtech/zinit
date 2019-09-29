@@ -9,7 +9,7 @@ use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::timer;
 
-use crate::settings::{self, Service};
+use crate::settings::Service;
 
 mod pm;
 use pm::WaitStatusExt;
@@ -161,11 +161,14 @@ impl Manager {
     /// so the delay is 0 250 500 750 1000 1250 for a max delay of 2 seconds.
     /// The test will keep retrying until the test succeed, or the service is marked
     /// as Down.
-    fn tester(&mut self, id: String, cmd: String) -> impl Future<Item = (), Error = ()> {
+    fn tester(&mut self, id: String, cmd: Option<Service>) -> impl Future<Item = (), Error = ()> {
         use std::time::{Duration, Instant};
-        if cmd.is_empty() {
-            return future::Either::A(future::ok(()));
-        }
+        let cmd = match cmd {
+            Some(cmd) => cmd,
+            None => {
+                return future::Either::A(future::ok(()));
+            }
+        };
 
         let table = Arc::clone(&self.pm);
         let testers = Arc::clone(&self.testers);
@@ -191,11 +194,7 @@ impl Manager {
                 let delayed = timer::Delay::new(deadline)
                     .map_err(|e| format_err!("{}", e))
                     .and_then(move |_| {
-                        match table.lock().unwrap().child(
-                            format!("{}/test", id),
-                            cmd,
-                            settings::Log::Ring,
-                        ) {
+                        match table.lock().unwrap().child(format!("{}/test", id), cmd) {
                             Ok((_, child)) => future::Either::A(child),
                             Err(err) => future::Either::B(future::err(err)),
                         }
@@ -239,13 +238,12 @@ impl Manager {
 
         let tx = self.tx.clone();
         process.state = State::Spawned;
-        let exec = process.config.exec.clone();
-        let test = process.config.test.clone();
-        let log = process.config.log.clone();
+        let config = process.config.clone();
+        let test = config.test_as_service();
         drop(process);
 
         let service = name.clone();
-        let child = match self.pm.lock().unwrap().child(name.clone(), exec, log) {
+        let child = match self.pm.lock().unwrap().child(name.clone(), config) {
             Ok((pid, child)) => {
                 // update the process pid
                 let mut process = self.processes.get_mut(&name).unwrap();

@@ -1,4 +1,4 @@
-use crate::settings::Log;
+use crate::settings::{Log, Service};
 use failure::Error;
 use nix::sys::wait::{self, WaitStatus};
 use ringlog::RingLog;
@@ -105,14 +105,12 @@ impl ProcessManager {
         Ok(())
     }
 
-    /// creates a child process future from command line
     pub fn child(
         &mut self,
         id: String,
-        cmd: String,
-        log: Log,
+        service: Service,
     ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
-        let args = match shlex::split(&cmd) {
+        let args = match shlex::split(&service.exec) {
             Some(args) => args,
             _ => bail!("invalid command line"),
         };
@@ -122,14 +120,14 @@ impl ProcessManager {
         }
 
         let mut cmd = Command::new(&args[0]);
-        let cmd = match log {
+        let cmd = match service.log {
             Log::Stdout => &mut cmd,
             Log::Ring => cmd.stdout(Stdio::piped()).stderr(Stdio::piped()),
         };
 
-        let cmd = cmd.args(&args[1..]);
+        let cmd = cmd.args(&args[1..]).envs(service.env);
 
-        self.cmd(id, cmd, log)
+        self.cmd(id, cmd, service.log)
     }
 
     /// return the process manager future. it's up to the
