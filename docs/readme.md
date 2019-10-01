@@ -107,3 +107,7 @@ As already described above, once zinit starts in init mode, it auto monitor all 
 - `log`: show services logs from the zinit ring buffer. The buffer size is configured in `init`
 - `monitor`: monitor will load config of a service `name` from the configuration directory. and monitor it, this will allow you to add new
 service to the configuration directory in runtime.
+
+## Config Files
+zinit does not require any other config files other that the service unit files. But zinit respects some of the global unix standard files:
+- `/etc/environment` . The file is read one time during boot, changes to this file in runtime has no effect (even for new services)
