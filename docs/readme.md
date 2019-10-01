@@ -20,6 +20,8 @@ after: # list of services that we depend on (optional)
 signal: # optional section
   stop: SIGKILL # the signal sent on `stop` action. default to SIGTERM
 log: null | ring | stdout
+env:
+  KEY: VALUE
 ```
 
 - `oneshot` service is not going to re-spawn when it exits.
@@ -33,6 +35,7 @@ log: null | ring | stdout
   - `null`: ignore all service logs (like `> /dev/null`)
   - `ring`: the default value, which means all logs of the service is written to the kernel ring buffer. The name is service is prepended to the log line.
   - `stdout`: print the output on zinit stdout
+- env (dict) is an extra set of env variables (KEY, VALUE) paris that would be available on a service
 
 > Note: to use `ring` inside docker make sure you add the `kmsg` device to the list of allowed devices
 ```
@@ -104,3 +107,7 @@ As already described above, once zinit starts in init mode, it auto monitor all 
 - `log`: show services logs from the zinit ring buffer. The buffer size is configured in `init`
 - `monitor`: monitor will load config of a service `name` from the configuration directory. and monitor it, this will allow you to add new
 service to the configuration directory in runtime.
+
+## Config Files
+zinit does not require any other config files other that the service unit files. But zinit respects some of the global unix standard files:
+- `/etc/environment` . The file is read one time during boot, changes to this file in runtime has no effect (even for new services)

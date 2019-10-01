@@ -55,6 +55,7 @@ pub struct Service {
     pub after: Vec<String>,
     pub signal: Signal,
     pub log: Log,
+    pub env: HashMap<String, String>,
 }
 
 impl Service {
@@ -68,6 +69,26 @@ impl Service {
         Signal::from_str(&self.signal.stop.to_uppercase())?;
 
         Ok(())
+    }
+
+    pub fn test_as_service(&self) -> Option<Service> {
+        if self.test.len() == 0 {
+            return None;
+        }
+
+        let test = match self.clone() {
+            Service { test, log, env, .. } => Service {
+                exec: test,
+                test: String::default(),
+                one_shot: true,
+                after: vec![],
+                log: log,
+                env: env,
+                signal: Signal::default(),
+            },
+        };
+
+        Some(test)
     }
 }
 /// load loads a single file

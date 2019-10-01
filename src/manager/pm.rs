@@ -1,9 +1,9 @@
-use crate::settings::Log;
+use crate::settings::{Log, Service};
 use failure::Error;
 use nix::sys::wait::{self, WaitStatus};
 use ringlog::RingLog;
 use std::collections::HashMap;
-use std::fs::File as StdFile;
+use std::fs::{self, File as StdFile};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct ProcessManager {
     ps: Arc<Mutex<HashMap<u32, Sender<WaitStatus>>>>,
     ringlog: Arc<RingLog>,
+    env: Environ,
 }
 
 impl ProcessManager {
@@ -44,6 +45,7 @@ impl ProcessManager {
         ProcessManager {
             ps: Arc::new(Mutex::new(HashMap::new())),
             ringlog: ring,
+            env: Environ::new(),
         }
     }
 
@@ -105,14 +107,12 @@ impl ProcessManager {
         Ok(())
     }
 
-    /// creates a child process future from command line
     pub fn child(
         &mut self,
         id: String,
-        cmd: String,
-        log: Log,
+        service: Service,
     ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
-        let args = match shlex::split(&cmd) {
+        let args = match shlex::split(&service.exec) {
             Some(args) => args,
             _ => bail!("invalid command line"),
         };
@@ -122,14 +122,14 @@ impl ProcessManager {
         }
 
         let mut cmd = Command::new(&args[0]);
-        let cmd = match log {
+        let cmd = match service.log {
             Log::Stdout => &mut cmd,
             Log::Ring => cmd.stdout(Stdio::piped()).stderr(Stdio::piped()),
         };
 
-        let cmd = cmd.args(&args[1..]);
+        let cmd = cmd.args(&args[1..]).envs(&self.env.0).envs(service.env);
 
-        self.cmd(id, cmd, log)
+        self.cmd(id, cmd, service.log)
     }
 
     /// return the process manager future. it's up to the
@@ -163,5 +163,50 @@ impl ProcessManager {
 
             Ok(())
         })
+    }
+}
+
+struct Environ(HashMap<String, String>);
+
+impl Environ {
+    fn new() -> Environ {
+        let mut env = HashMap::new();
+        for p in &["/etc/environment"] {
+            let r = match Environ::parse(p) {
+                Ok(r) => r,
+                Err(_) => {
+                    //skip
+                    continue;
+                }
+            };
+
+            env.extend(r);
+        }
+
+        Environ(env)
+    }
+
+    fn parse<P>(p: P) -> Result<HashMap<String, String>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let mut m = HashMap::new();
+        let txt = fs::read_to_string(p)?;
+        for line in txt.lines() {
+            let line = line.trim();
+            if line.starts_with("#") {
+                continue;
+            }
+            let parts: Vec<&str> = line.splitn(2, "=").collect();
+            let key = String::from(parts[0]);
+            let value = match parts.len() {
+                2 => String::from(parts[1]),
+                _ => String::default(),
+            };
+            //m.into_iter()
+            m.insert(key, value);
+        }
+
+        Ok(m)
     }
 }
