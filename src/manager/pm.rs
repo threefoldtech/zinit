@@ -27,6 +27,11 @@ impl WaitStatusExt for WaitStatus {
 
 const SIGCHLD: i32 = 17;
 
+// hard coded pass to libstdbuf.
+// TODO: this should be replaced with another way to
+// detect where the libstdbuf.so is available.
+const STDBUFLIB: &str = "/usr/lib/libstdbuf.so";
+
 type Result<T> = std::result::Result<T, Error>;
 
 /// the process manager maintains a list or running processes
@@ -38,6 +43,7 @@ pub struct ProcessManager {
     ps: Arc<Mutex<HashMap<u32, Sender<WaitStatus>>>>,
     ringlog: Arc<RingLog>,
     env: Environ,
+    use_stdbuf: bool,
 }
 
 impl ProcessManager {
@@ -46,6 +52,10 @@ impl ProcessManager {
             ps: Arc::new(Mutex::new(HashMap::new())),
             ringlog: ring,
             env: Environ::new(),
+            use_stdbuf: match std::fs::metadata(STDBUFLIB) {
+                Ok(_) => true,
+                Err(_) => false,
+            },
         }
     }
 
@@ -128,6 +138,13 @@ impl ProcessManager {
         };
 
         let cmd = cmd.args(&args[1..]).envs(&self.env.0).envs(service.env);
+        let cmd = match self.use_stdbuf {
+            true => cmd
+                .env("LD_PRELOAD", STDBUFLIB)
+                .env("_STDBUF_O", "L")
+                .env("_STDBUF_E", "L"),
+            false => cmd,
+        };
 
         self.cmd(id, cmd, service.log)
     }
