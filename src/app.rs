@@ -217,7 +217,7 @@ pub fn log(filter: Option<&str>) -> Result<()> {
                 if line[4..].starts_with(&filter) {
                     stdout.write(line.as_bytes())?;
                 }
-                
+
                 line.truncate(0);
             }
         }
