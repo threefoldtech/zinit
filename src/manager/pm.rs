@@ -137,7 +137,7 @@ impl ProcessManager {
             Log::Ring => cmd.stdout(Stdio::piped()).stderr(Stdio::piped()),
         };
 
-        let cmd = cmd.args(&args[1..]).envs(&self.env.0).envs(service.env);
+        let cmd = cmd.args(&args[1..]).envs(&self.env.0).envs(service.env).current_dir("/");
         let cmd = match self.use_stdbuf {
             true => cmd
                 .env("LD_PRELOAD", STDBUFLIB)
