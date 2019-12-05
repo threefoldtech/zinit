@@ -6,10 +6,14 @@ mod app;
 #[allow(dead_code)]
 mod manager;
 #[allow(dead_code)]
+mod ring;
+#[allow(dead_code)]
 mod settings;
 
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate futures;
 #[macro_use]
 extern crate log;
 extern crate simple_logger;
@@ -37,7 +41,7 @@ fn main() {
                     .short("b")
                     .long("buffer")
                     .help("buffer size (in lines) to keep services logs")
-                    .default_value("2000")
+                    .default_value("100")
                 )
                 .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
                 .about("run in init mode, start and maintain configured services"),

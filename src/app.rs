@@ -2,9 +2,9 @@ use crate::api;
 use crate::manager;
 use crate::settings;
 
+use super::ring::RingLog;
 use failure::Error;
 use future::lazy;
-use ringlog::RingLog;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::os::unix::net;

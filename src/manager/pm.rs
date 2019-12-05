@@ -1,7 +1,7 @@
+use crate::ring::RingLog;
 use crate::settings::{Log, Service};
 use failure::Error;
 use nix::sys::wait::{self, WaitStatus};
-use ringlog::RingLog;
 use std::collections::HashMap;
 use std::fs::{self, File as StdFile};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -137,7 +137,11 @@ impl ProcessManager {
             Log::Ring => cmd.stdout(Stdio::piped()).stderr(Stdio::piped()),
         };
 
-        let cmd = cmd.args(&args[1..]).envs(&self.env.0).envs(service.env).current_dir("/");
+        let cmd = cmd
+            .args(&args[1..])
+            .envs(&self.env.0)
+            .envs(service.env)
+            .current_dir("/");
         let cmd = match self.use_stdbuf {
             true => cmd
                 .env("LD_PRELOAD", STDBUFLIB)

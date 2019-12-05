@@ -17,4 +17,3 @@ nix = "0.14"
 bitflags = "1.0.4"
 log = "0.4"
 simple_logger = "1.2.0"
-ringlogd = { git = "https://github.com/threefoldtech/ringlogd" }

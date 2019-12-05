@@ -1,7 +1,7 @@
+use crate::ring::RingLog;
 use failure::Error;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
-use ringlog::RingLog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::u64::MAX;

@@ -1,7 +1,7 @@
+use crate::ring::RingLog;
 use failure::Error;
 use future;
 use nix::sys::signal;
-use ringlog::RingLog;
 use shlex;
 use std::str::FromStr;
 use std::sync::Arc;
