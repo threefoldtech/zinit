@@ -83,9 +83,9 @@ impl<T> Ring<T> {
         head
     }
 
-    pub fn scan<F>(&self, cur: Option<Cursor<T>>, f: F) -> Cursor<T>
+    pub fn scan<F>(&self, cur: Option<Cursor<T>>, mut f: F) -> Cursor<T>
     where
-        F: Fn(&T),
+        F: FnMut(&T),
     {
         let mut head = match cur {
             Some(cur) => cur,
@@ -217,156 +217,43 @@ impl<E: Clone + Default> Stream for BufferStream<E> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     #[test]
-//     fn test_capacity() {
-//         let mut buf = Ring::<i32>::new(100);
+    #[test]
+    fn test_push() {
+        let mut buf = Ring::<i32>::new(10);
 
-//         for i in 0..200 {
-//             buf.push(i);
-//         }
+        for i in 0..20 {
+            buf.push(i);
+        }
+        let mut l = vec![];
 
-//         assert_eq!(buf.capacity(), 100);
-//     }
+        buf.scan(None, |v| l.push(*v));
+        assert_eq!(l.len(), 10);
+        assert_eq!(l[0], 10);
+    }
 
-//     #[test]
-//     fn test_index() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
+    #[test]
+    fn test_advance() {
+        let mut buf = Ring::<i32>::new(10);
 
-//         for i in 0..50 {
-//             buf.push(i);
-//         }
+        for i in 0..2 {
+            buf.push(i);
+        }
 
-//         assert_eq!(buf[0], 0);
-//         assert_eq!(buf[49], 49);
-//     }
+        let (cur, value) = buf.advance(None);
+        assert_eq!(value, Some(0));
 
-//     #[test]
-//     fn test_index_full() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
+        let (cur, value) = buf.advance(Some(cur));
+        assert_eq!(value, Some(1));
 
-//         for i in 0..150 {
-//             buf.push(i);
-//         }
+        let (cur, value) = buf.advance(Some(cur));
+        assert_eq!(value, None);
 
-//         assert_eq!(buf[50], 50);
-//         assert_eq!(buf[149], 149);
-//     }
-
-//     #[test]
-//     fn test_index_overflow() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
-
-//         for i in 0..100 {
-//             buf.push(i);
-//         }
-
-//         buf.cur = 50; // force overflow
-
-//         assert_eq!(buf[usize::max_value() - 50], 65);
-//         assert_eq!(buf[49], 49);
-//     }
-
-//     #[test]
-//     #[should_panic(expected = "position out of range")]
-//     fn test_index_overflow_out_of_range() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
-
-//         for i in 0..100 {
-//             buf.push(i);
-//         }
-
-//         buf.cur = 50; // force overflow
-
-//         buf[usize::max_value() - 60];
-//     }
-
-//     #[test]
-//     fn test_head() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
-
-//         for i in 0..150 {
-//             buf.push(i);
-//         }
-
-//         assert_eq!(buf.head(), 50);
-//     }
-
-//     #[test]
-//     fn test_head_underflow() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
-
-//         for i in 0..90 {
-//             buf.push(i);
-//         }
-
-//         assert_eq!(buf.head(), 0);
-//     }
-
-//     #[test]
-//     fn test_head_overflow() {
-//         let mut buf = CircularBuffer::<i32>::new(100);
-
-//         for i in 0..100 {
-//             buf.push(i);
-//         }
-
-//         buf.cur = usize::max_value() - 50;
-//         assert_eq!(buf.head(), usize::max_value() - 150);
-
-//         buf.cur = 50;
-//         // since the buffer is full this means
-//         // the cur has overflowed, and rotated to the beginning
-//         assert_eq!(buf.head(), usize::max_value() - 50);
-//     }
-
-//     #[test]
-//     #[should_panic(expected = "position out of range")]
-//     fn test_index_empty() {
-//         let buf = CircularBuffer::<i32>::new(100);
-
-//         assert_eq!(buf[0], 50);
-//     }
-
-//     #[test]
-//     fn test_stream() {
-//         let mut buf = AsyncBuffer::<i32>::new(100);
-//         let stream = buf.stream();
-
-//         for i in 0..150 {
-//             let _ = buf.push(i);
-//         }
-
-//         let result = stream.take(100).collect().wait().unwrap();
-
-//         assert_eq!(result.len(), 100);
-//         assert_eq!(result[0], 50);
-//         assert_eq!(result[99], 149);
-//     }
-
-//     #[test]
-//     fn test_stream_overflow() {
-//         //TODO:
-//         let mut buf = AsyncBuffer::<i32>::new(100);
-
-//         for i in 0..150 {
-//             let _ = buf.push(i);
-//         }
-
-//         buf.buffer.write().unwrap().cur = usize::max_value() - 10; // force overflow
-//         for i in 0..150 {
-//             let _ = buf.push(i);
-//         }
-
-//         let stream = buf.stream();
-
-//         let result = stream.take(100).collect().wait().unwrap();
-
-//         assert_eq!(result.len(), 100);
-//         assert_eq!(result[0], 50);
-//         assert_eq!(result[99], 149);
-//     }
-// }
+        buf.push(2);
+        let (_, value) = buf.advance(Some(cur));
+        assert_eq!(value, Some(2));
+    }
+}
