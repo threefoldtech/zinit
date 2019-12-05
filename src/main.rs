@@ -41,7 +41,7 @@ fn main() {
                     .short("b")
                     .long("buffer")
                     .help("buffer size (in lines) to keep services logs")
-                    .default_value("100")
+                    .default_value("2000")
                 )
                 .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
                 .about("run in init mode, start and maintain configured services"),
