@@ -156,8 +156,8 @@ impl<E: Clone> AsyncRing<E> {
         let (tx, rx) = watch::channel(0);
         AsyncRing {
             ring: Arc::new(RwLock::new(Ring::new(cap))),
-            rx: rx,
-            tx: tx,
+            rx,
+            tx,
             signal: 0,
         }
     }

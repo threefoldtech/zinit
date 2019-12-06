@@ -150,7 +150,7 @@ fn main() {
     };
 
     match result {
-        Ok(_) => return,
+        Ok(_) => {},
         Err(e) => {
             eprintln!("{}", e);
             std::process::exit(1);
