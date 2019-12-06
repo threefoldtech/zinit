@@ -52,7 +52,7 @@ impl ProcessManager {
             ps: Arc::new(Mutex::new(HashMap::new())),
             ringlog,
             env: Environ::new(),
-            use_stdbuf: std::fs::metadata(STDBUFLIB).is_ok() ,
+            use_stdbuf: std::fs::metadata(STDBUFLIB).is_ok(),
         }
     }
 
@@ -83,10 +83,12 @@ impl ProcessManager {
         log: Log,
     ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
         let mut child = cmd.spawn()?;
-        if let Log::Ring = log { self.ring(id, &mut child)? };
+        if let Log::Ring = log {
+            self.ring(id, &mut child)?
+        };
         let (sender, receiver) = oneshot::channel::<WaitStatus>();
 
-        // 
+        //
         self.ps.lock().unwrap().insert(child.id(), sender);
 
         Ok((child.id(), receiver.map_err(|e| format_err!("{}", e))))
@@ -138,8 +140,7 @@ impl ProcessManager {
             .envs(service.env)
             .current_dir("/");
         let cmd = if self.use_stdbuf {
-            cmd
-                .env("LD_PRELOAD", STDBUFLIB)
+            cmd.env("LD_PRELOAD", STDBUFLIB)
                 .env("_STDBUF_O", "L")
                 .env("_STDBUF_E", "L")
         } else {

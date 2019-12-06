@@ -87,7 +87,7 @@ impl RingLog {
             .map(|name| {
                 debug!(
                     "client '{}' disconnected",
-                    name.unwrap_or_else(||String::from("UNKNOWN"))
+                    name.unwrap_or_else(|| String::from("UNKNOWN"))
                 )
             })
     }

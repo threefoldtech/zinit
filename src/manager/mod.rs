@@ -358,7 +358,11 @@ impl Manager {
 
         let can_schedule = self.can_schedule(&service);
 
-        let state = if can_schedule { State::Scheduled } else { State::Blocked };
+        let state = if can_schedule {
+            State::Scheduled
+        } else {
+            State::Blocked
+        };
 
         self.processes
             .insert(name.clone(), Process::new(service, state));
@@ -383,10 +387,10 @@ impl Manager {
         };
 
         match process.state {
-            State::Running | State::Spawned => {},
+            State::Running | State::Spawned => {}
             _ => match process.target {
                 Target::Up => self.exec(name),
-                Target::Down => {},
+                Target::Down => {}
             },
         }
     }
@@ -441,7 +445,11 @@ impl Manager {
         };
 
         process.pid = 0;
-        let state = if status.success() { State::Success } else { State::Error(status) };
+        let state = if status.success() {
+            State::Success
+        } else {
+            State::Error(status)
+        };
         let tx = self.tx.clone();
         tokio::spawn(
             tx.send(Message::State(name.clone(), state))

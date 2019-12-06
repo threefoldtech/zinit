@@ -41,7 +41,7 @@ fn status(args: &[String], handle: Handle) -> Result<Option<String>> {
     result += &format!("pid: {}\n", process.pid);
     result += &format!("state: {:?}\n", process.state);
     result += &format!("target: {:?}\n", process.target);
-    if !process.config.after.is_empty()  {
+    if !process.config.after.is_empty() {
         result += &"after: \n".to_string();
     }
     for dep in process.config.after {
