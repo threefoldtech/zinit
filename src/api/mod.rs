@@ -41,8 +41,8 @@ fn status(args: &[String], handle: Handle) -> Result<Option<String>> {
     result += &format!("pid: {}\n", process.pid);
     result += &format!("state: {:?}\n", process.state);
     result += &format!("target: {:?}\n", process.target);
-    if process.config.after.len() > 0 {
-        result += &format!("after: \n");
+    if !process.config.after.is_empty() {
+        result += &"after: \n".to_string();
     }
     for dep in process.config.after {
         let state = match handle.status(&dep) {
@@ -104,7 +104,7 @@ fn monitor(args: &[String], handle: Handle) -> Result<Option<String>> {
 }
 
 fn process_cmd(handle: Handle, cmd: Vec<String>) -> Result<Option<String>> {
-    if cmd.len() == 0 {
+    if cmd.is_empty() {
         bail!("missing command");
     }
 

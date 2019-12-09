@@ -62,7 +62,7 @@ impl Service {
     pub fn validate(&self) -> Result<()> {
         use nix::sys::signal::Signal;
         use std::str::FromStr;
-        if self.exec.len() == 0 {
+        if self.exec.is_empty() {
             bail!("missing exec directive");
         }
 
@@ -72,7 +72,7 @@ impl Service {
     }
 
     pub fn test_as_service(&self) -> Option<Service> {
-        if self.test.len() == 0 {
+        if self.test.is_empty() {
             return None;
         }
 
@@ -82,8 +82,8 @@ impl Service {
                 test: String::default(),
                 one_shot: true,
                 after: vec![],
-                log: log,
-                env: env,
+                log,
+                env,
                 signal: Signal::default(),
             },
         };
