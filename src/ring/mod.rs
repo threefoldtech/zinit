@@ -2,7 +2,6 @@
 mod buffer;
 
 use buffer::AsyncRing;
-use failure::Error;
 use std::sync::{Arc, RwLock};
 use tokio::codec::{FramedRead, FramedWrite, LinesCodec};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -28,13 +27,17 @@ impl RingLog {
         T: AsyncWrite,
     {
         // read lock the buffer, and send it to output
-        let buffer = self.buffer.read().unwrap();
+        let mut buffer = self.buffer.write().unwrap();
         let stream = buffer.stream();
         let framed = FramedWrite::new(out, LinesCodec::new());
 
         stream
-            .fold(framed, |framed, line| framed.send(line))
-            .map_err(|_: Error| ())
+            .and_then(|stream| {
+                stream
+                    .fold(framed, |framed, line| framed.send(line))
+                    .map_err(|_| ())
+            })
+            .map_err(|_| ())
             .map(|_| ())
     }
 
@@ -51,9 +54,7 @@ impl RingLog {
                 buf.write()
                     .unwrap()
                     .push(format!("{}: {}", name, line))
-                    .unwrap();
-
-                future::ok(name)
+                    .map(|_| name)
             })
             .map(|name| debug!("client '{}' disconnected", name))
     }
@@ -73,15 +74,18 @@ impl RingLog {
             .fold(None, move |name, line| {
                 match name {
                     // first line (name is unknown) we just set the name
-                    None => future::ok(Some(line)),
+                    None => future::Either::A(future::ok(Some(line))),
                     // second iteration, we write the line to buffer
                     // and then yield the name again for the line after.
                     Some(name) => {
-                        buf.write()
+                        let f = buf
+                            .write()
                             .unwrap()
                             .push(format!("{}: {}", name, line))
-                            .unwrap();
-                        future::ok(Some(name))
+                            .map(|_| Some(name));
+
+                        future::Either::B(f)
+                        //future::ok(Some(name))
                     }
                 }
             })
