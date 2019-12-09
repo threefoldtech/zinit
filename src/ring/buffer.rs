@@ -79,7 +79,7 @@ impl<T> AsyncRing<T> {
         let mut futures = vec![];
         for (k, v) in map.lock().unwrap().iter() {
             let m = Arc::clone(&self.map);
-            let k = k.clone();
+            let k = *k;
             let f = v
                 .clone()
                 .send(Arc::clone(&item))
@@ -102,7 +102,7 @@ impl<T> AsyncRing<T> {
         tx.send_all(stream::iter_ok(self.ring.iter()))
             .map(move |(tx, _)| {
                 map.lock().unwrap().insert(id, tx);
-                BufferStream { rx: rx }
+                BufferStream { rx }
             })
             .map_err(|_| ())
     }
