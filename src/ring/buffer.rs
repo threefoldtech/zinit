@@ -98,7 +98,17 @@ impl<T> AsyncRing<T> {
         let map = Arc::clone(&self.map);
 
         let id: u64 = rand::random();
-
+        // TODO: Known Issue
+        // Send all happens asynchronusly, it means the (tx)
+        // will not be stored on the `map` until all history
+        // is sent. This means if a PUSH happens during this time
+        // the client will never receive this line. This only
+        // happen during the sending of the history (current buffer)
+        //
+        // On the otherhand, we can clone the tx and put it in the map
+        // before we start the copying, but in that case if a PUSH happens
+        // we risk receiving the logs in the client side out of order
+        // this can cause other issues in log collectors (like promtail)
         tx.send_all(stream::iter_ok(self.ring.iter()))
             .map(move |(tx, _)| {
                 map.lock().unwrap().insert(id, tx);
