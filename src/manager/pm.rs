@@ -88,7 +88,6 @@ impl ProcessManager {
         };
         let (sender, receiver) = oneshot::channel::<WaitStatus>();
 
-        //
         self.ps.lock().unwrap().insert(child.id(), sender);
 
         Ok((child.id(), receiver.map_err(|e| format_err!("{}", e))))

@@ -1,7 +1,5 @@
 use failure::Error;
 use std::collections::HashMap;
-use std::iter::{Chain, Cloned};
-use std::slice::Iter as SliceIter;
 use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
 use tokio::sync::mpsc::{
@@ -12,8 +10,6 @@ struct Ring<T> {
     inner: Vec<Arc<T>>,
     at: usize,
 }
-
-pub type Iter<'a, T> = Chain<Cloned<SliceIter<'a, T>>, Cloned<SliceIter<'a, T>>>;
 
 impl<T> Ring<T> {
     pub fn new(cap: usize) -> Ring<T> {
@@ -46,12 +42,8 @@ impl<T> Ring<T> {
 
     pub fn iter(&self) -> Vec<Arc<T>> {
         let (a, b) = self.inner.split_at(self.at);
-        let mut v = vec![];
-        for ob in b.iter().cloned().chain(a.iter().cloned()) {
-            v.push(ob);
-        }
 
-        v
+        b.iter().cloned().chain(a.iter().cloned()).collect()
     }
 }
 
@@ -122,7 +114,7 @@ pub struct BufferStream<E> {
     rx: Receiver<Arc<E>>,
 }
 
-impl<E: Clone + Default> Stream for BufferStream<E> {
+impl<E: Clone> Stream for BufferStream<E> {
     type Item = E;
     type Error = Error;
 

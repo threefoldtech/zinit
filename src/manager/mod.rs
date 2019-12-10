@@ -240,7 +240,6 @@ impl Manager {
         process.state = State::Spawned;
         let config = process.config.clone();
         let test = config.test_as_service();
-        // drop(process);
 
         let service = name.clone();
         let child = match self.pm.lock().unwrap().child(name.clone(), config) {

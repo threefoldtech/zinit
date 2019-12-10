@@ -57,42 +57,4 @@ impl RingLog {
             })
             .map(|name| debug!("client '{}' disconnected", name))
     }
-
-    /// pipe input to the ring. In this pipe mode, the name is read from the stream itself
-    /// as the first line, so log writers should define them selves in the first line (name)
-    /// followed with the log output.
-    pub fn pipe<T>(&self, inner: T) -> impl Future<Item = (), Error = ()>
-    where
-        T: AsyncRead,
-    {
-        let framed = FramedRead::new(inner, LinesCodec::new());
-        let buf = Arc::clone(&self.buffer);
-
-        framed
-            .map_err(|e| eprintln!("failed to read input from client: {}", e))
-            .fold(None, move |name, line| {
-                match name {
-                    // first line (name is unknown) we just set the name
-                    None => future::Either::A(future::ok(Some(line))),
-                    // second iteration, we write the line to buffer
-                    // and then yield the name again for the line after.
-                    Some(name) => {
-                        let f = buf
-                            .write()
-                            .unwrap()
-                            .push(format!("{}: {}", name, line))
-                            .map(|_| Some(name));
-
-                        future::Either::B(f)
-                        //future::ok(Some(name))
-                    }
-                }
-            })
-            .map(|name| {
-                debug!(
-                    "client '{}' disconnected",
-                    name.unwrap_or_else(|| String::from("UNKNOWN"))
-                )
-            })
-    }
 }

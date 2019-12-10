@@ -1,11 +1,8 @@
 use clap::{App, Arg, SubCommand};
 
-#[allow(dead_code)]
 mod api;
 mod app;
-#[allow(dead_code)]
 mod manager;
-#[allow(dead_code)]
 mod ring;
 #[allow(dead_code)]
 mod settings;
