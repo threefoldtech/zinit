@@ -1,7 +1,7 @@
+use crate::ring::RingLog;
 use failure::Error;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
-use ringlog::RingLog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::u64::MAX;
@@ -32,7 +32,7 @@ impl Process {
     fn new(service: Service, state: State) -> Process {
         Process {
             pid: 0,
-            state: state,
+            state,
             config: service,
             target: Target::Up,
         }
@@ -150,7 +150,7 @@ impl Manager {
         Manager {
             pm: Arc::new(Mutex::new(pm::ProcessManager::new(log))),
             processes: HashMap::new(),
-            tx: tx,
+            tx,
             rx: Some(rx),
             testers: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -176,7 +176,7 @@ impl Manager {
             .for_each(move |i| {
                 let id = id.clone();
                 let testers = Arc::clone(&testers);
-                if let None = testers.lock().unwrap().get(&id) {
+                if testers.lock().unwrap().get(&id).is_none() {
                     // the test is not register anymore
                     // we need to break the loop
                     return future::Either::B(future::err(()));
@@ -240,7 +240,6 @@ impl Manager {
         process.state = State::Spawned;
         let config = process.config.clone();
         let test = config.test_as_service();
-        drop(process);
 
         let service = name.clone();
         let child = match self.pm.lock().unwrap().child(name.clone(), config) {
@@ -358,9 +357,10 @@ impl Manager {
 
         let can_schedule = self.can_schedule(&service);
 
-        let state = match can_schedule {
-            true => State::Scheduled,
-            false => State::Blocked,
+        let state = if can_schedule {
+            State::Scheduled
+        } else {
+            State::Blocked
         };
 
         self.processes
@@ -386,10 +386,10 @@ impl Manager {
         };
 
         match process.state {
-            State::Running | State::Spawned => return,
+            State::Running | State::Spawned => {}
             _ => match process.target {
                 Target::Up => self.exec(name),
-                Target::Down => return,
+                Target::Down => {}
             },
         }
     }
@@ -444,9 +444,10 @@ impl Manager {
         };
 
         process.pid = 0;
-        let state = match status.success() {
-            true => State::Success,
-            false => State::Error(status),
+        let state = if status.success() {
+            State::Success
+        } else {
+            State::Error(status)
         };
         let tx = self.tx.clone();
         tokio::spawn(
@@ -495,7 +496,7 @@ impl Manager {
         self.testers.lock().unwrap().remove(name);
 
         process.target = Target::Down;
-        if process.pid <= 0 {
+        if process.pid == 0 {
             return Ok(());
         }
 
@@ -517,7 +518,7 @@ impl Manager {
             }
         };
 
-        if process.pid <= 0 {
+        if process.pid == 0 {
             bail!("service is not running");
         }
 
@@ -630,7 +631,6 @@ impl Manager {
             })
             .map_err(|e| {
                 println!("error: {}", e);
-                ()
             });
 
         tokio::spawn(future);

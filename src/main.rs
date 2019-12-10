@@ -1,15 +1,16 @@
 use clap::{App, Arg, SubCommand};
 
-#[allow(dead_code)]
 mod api;
 mod app;
-#[allow(dead_code)]
 mod manager;
+mod ring;
 #[allow(dead_code)]
 mod settings;
 
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate futures;
 #[macro_use]
 extern crate log;
 extern crate simple_logger;
@@ -146,7 +147,7 @@ fn main() {
     };
 
     match result {
-        Ok(_) => return,
+        Ok(_) => {}
         Err(e) => {
             eprintln!("{}", e);
             std::process::exit(1);

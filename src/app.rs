@@ -2,9 +2,9 @@ use crate::api;
 use crate::manager;
 use crate::settings;
 
+use super::ring::RingLog;
 use failure::Error;
 use future::lazy;
-use ringlog::RingLog;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::os::unix::net;
@@ -106,7 +106,7 @@ trait APIProtocol: io::Read + io::Write {
                 break;
             }
 
-            let parts: Vec<&str> = line.splitn(2, ":").collect();
+            let parts: Vec<&str> = line.splitn(2, ':').collect();
             if parts.len() != 2 {
                 bail!("invalid header syntax");
             }
@@ -116,12 +116,12 @@ trait APIProtocol: io::Read + io::Write {
 
         let count = headers
             .get("lines")
-            .ok_or(format_err!("lines header not provided"))
+            .ok_or_else(|| format_err!("lines header not provided"))
             .map(|v| v.parse::<usize>())??;
 
         let status = headers
             .get("status")
-            .ok_or(format_err!("status header not provided"))
+            .ok_or_else(|| format_err!("status header not provided"))
             .map(|v| v.parse::<Status>())??;
 
         let mut buffer = String::new();
@@ -215,7 +215,7 @@ pub fn log(filter: Option<&str>) -> Result<()> {
                 }
 
                 if line[4..].starts_with(&filter) {
-                    stdout.write(line.as_bytes())?;
+                    stdout.write_all(line.as_bytes())?;
                 }
 
                 line.truncate(0);

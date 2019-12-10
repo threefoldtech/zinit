@@ -1,7 +1,7 @@
+use crate::ring::RingLog;
 use crate::settings::{Log, Service};
 use failure::Error;
 use nix::sys::wait::{self, WaitStatus};
-use ringlog::RingLog;
 use std::collections::HashMap;
 use std::fs::{self, File as StdFile};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -47,15 +47,12 @@ pub struct ProcessManager {
 }
 
 impl ProcessManager {
-    pub fn new(ring: Arc<RingLog>) -> ProcessManager {
+    pub fn new(ringlog: Arc<RingLog>) -> ProcessManager {
         ProcessManager {
             ps: Arc::new(Mutex::new(HashMap::new())),
-            ringlog: ring,
+            ringlog,
             env: Environ::new(),
-            use_stdbuf: match std::fs::metadata(STDBUFLIB) {
-                Ok(_) => true,
-                Err(_) => false,
-            },
+            use_stdbuf: std::fs::metadata(STDBUFLIB).is_ok(),
         }
     }
 
@@ -86,10 +83,9 @@ impl ProcessManager {
         log: Log,
     ) -> Result<(u32, impl Future<Item = WaitStatus, Error = Error>)> {
         let mut child = cmd.spawn()?;
-        match log {
-            Log::Ring => self.ring(id, &mut child)?,
-            _ => (),
-        }
+        if let Log::Ring = log {
+            self.ring(id, &mut child)?
+        };
         let (sender, receiver) = oneshot::channel::<WaitStatus>();
 
         self.ps.lock().unwrap().insert(child.id(), sender);
@@ -127,7 +123,7 @@ impl ProcessManager {
             _ => bail!("invalid command line"),
         };
 
-        if args.len() < 1 {
+        if args.is_empty() {
             bail!("invalid command line");
         }
 
@@ -137,13 +133,17 @@ impl ProcessManager {
             Log::Ring => cmd.stdout(Stdio::piped()).stderr(Stdio::piped()),
         };
 
-        let cmd = cmd.args(&args[1..]).envs(&self.env.0).envs(service.env).current_dir("/");
-        let cmd = match self.use_stdbuf {
-            true => cmd
-                .env("LD_PRELOAD", STDBUFLIB)
+        let cmd = cmd
+            .args(&args[1..])
+            .envs(&self.env.0)
+            .envs(service.env)
+            .current_dir("/");
+        let cmd = if self.use_stdbuf {
+            cmd.env("LD_PRELOAD", STDBUFLIB)
                 .env("_STDBUF_O", "L")
-                .env("_STDBUF_E", "L"),
-            false => cmd,
+                .env("_STDBUF_E", "L")
+        } else {
+            cmd
         };
 
         self.cmd(id, cmd, service.log)
@@ -211,10 +211,10 @@ impl Environ {
         let txt = fs::read_to_string(p)?;
         for line in txt.lines() {
             let line = line.trim();
-            if line.starts_with("#") {
+            if line.starts_with('#') {
                 continue;
             }
-            let parts: Vec<&str> = line.splitn(2, "=").collect();
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
             let key = String::from(parts[0]);
             let value = match parts.len() {
                 2 => String::from(parts[1]),
