@@ -85,7 +85,7 @@ impl<T> AsyncRing<T> {
         future::collect(futures).map(|_| ())
     }
 
-    pub fn stream(&mut self) -> impl Future<Item = BufferStream<T>, Error = ()> {
+    pub fn stream(&mut self) -> impl Future<Item = BufferStream<T>, Error = failure::Error> {
         let (tx, rx) = unbounded_channel();
         let map = Arc::clone(&self.map);
 
@@ -106,7 +106,7 @@ impl<T> AsyncRing<T> {
                 map.lock().unwrap().insert(id, tx);
                 BufferStream { rx }
             })
-            .map_err(|err| error!("error writing history: {}", err))
+            .map_err(|err| format_err!("error writing history: {}", err))
     }
 }
 

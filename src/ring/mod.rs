@@ -31,13 +31,9 @@ impl RingLog {
         let framed = FramedWrite::new(out, LinesCodec::new());
 
         stream
-            .and_then(|stream| {
-                stream
-                    .fold(framed, |framed, line| framed.send(line))
-                    .map_err(|_| ())
-            })
+            .and_then(|stream| stream.fold(framed, |framed, line| framed.send(line)))
             .map_err(|_| ())
-            .map(|_| ())
+            .map(|_| info!("log reader exited"))
     }
 
     pub fn named_pipe<T>(&self, name: String, inner: T) -> impl Future<Item = (), Error = ()>
