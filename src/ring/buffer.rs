@@ -72,20 +72,31 @@ impl<T> AsyncRing<T> {
         for (k, v) in map.lock().unwrap().iter() {
             let m = Arc::clone(&self.map);
             let k = *k;
-            let f = v
-                .clone()
-                .send(Arc::clone(&item))
-                .map(|_| ())
-                .map_err(move |_| {
+            // we use then, not map/map_err because we must make sure that push
+            // never fails. otherwise the pipe of the message sender
+            // will receive an error and get dropped (closed)
+            // map_err even if you return () does not mean that the future
+            // is considered (passed with no error) but only the error type changes
+            // to (). but the caller will still receive and empty error.
+            // the caller to push in our case is the pipe fold method.
+            // the error will cause it to exit! hence causing the pipe to drop.
+            let f = v.clone().send(Arc::clone(&item)).then(move |r| match r {
+                Ok(_) => Ok(()),
+                Err(_) => {
                     m.lock().unwrap().remove(&k);
-                });
+                    Ok(())
+                }
+            });
+
             futures.push(f);
         }
 
-        future::collect(futures).map(|_| ())
+        future::collect(futures)
+            .map(|_| ())
+            .map_err(|err: failure::Error| error!("failed to propagate logs to listeners: {}", err))
     }
 
-    pub fn stream(&mut self) -> impl Future<Item = BufferStream<T>, Error = ()> {
+    pub fn stream(&mut self) -> impl Future<Item = BufferStream<T>, Error = failure::Error> {
         let (tx, rx) = unbounded_channel();
         let map = Arc::clone(&self.map);
 
@@ -106,7 +117,7 @@ impl<T> AsyncRing<T> {
                 map.lock().unwrap().insert(id, tx);
                 BufferStream { rx }
             })
-            .map_err(|_| ())
+            .map_err(|err| format_err!("error writing history: {}", err))
     }
 }
 
