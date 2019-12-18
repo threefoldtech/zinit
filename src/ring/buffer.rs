@@ -106,7 +106,7 @@ impl<T> AsyncRing<T> {
                 map.lock().unwrap().insert(id, tx);
                 BufferStream { rx }
             })
-            .map_err(|_| ())
+            .map_err(|err| error!("error writing history: {}", err))
     }
 }
 

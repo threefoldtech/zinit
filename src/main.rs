@@ -13,10 +13,37 @@ extern crate failure;
 extern crate futures;
 #[macro_use]
 extern crate log;
-extern crate simple_logger;
+
+fn setup_logger() -> Result<(), fern::InitError> {
+    let logger = fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "zinit: {} ({}) {}",
+                //chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Info)
+        .chain(std::io::stdout());
+    let logger = match std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
+        Ok(file) => logger.chain(file),
+        Err(err) => {
+            eprintln!("failed to open /dev/kmsg: {}", err);
+            logger
+        }
+    };
+    logger.apply()?;
+
+    Ok(())
+}
 
 fn main() {
-    simple_logger::init_with_level(log::Level::Info).unwrap();
+    match setup_logger() {
+        Ok(_) => {}
+        Err(err) => eprintln!("failed to initialize logging: {}", err),
+    }
 
     let matches = App::new("zinit")
         .author("ThreeFold Tech, https://github.com/threefoldtech")

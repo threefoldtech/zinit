@@ -21,7 +21,7 @@ pub fn init(buffer: usize, config: &str, debug: bool) -> Result<()> {
     if !debug && std::process::id() != 1 {
         bail!("can only run as pid 1");
     }
-
+    info!("starting init");
     std::env::set_current_dir(config)?;
 
     let configs = settings::load_dir(".", |file, err| {
