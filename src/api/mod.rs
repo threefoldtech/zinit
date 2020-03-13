@@ -3,9 +3,12 @@ use failure::Error;
 use future;
 use nix::sys::signal;
 use shlex;
+use snafu::{ResultExt, Snafu}; // 0.2.3
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{fs, path};
 use tokio::codec::{Framed, LinesCodec};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::prelude::*;
@@ -17,6 +20,13 @@ pub const SOCKET_NAME: &str = "zinit.sock";
 pub const RINGLOG_NAME: &str = "log.sock";
 
 type Result<T> = std::result::Result<T, Error>;
+type PathResult<T> = std::result::Result<T, ProgramError>;
+
+#[derive(Debug, Snafu)]
+pub enum ProgramError {
+    #[snafu(display("{}: {}", path.display(), source))]
+    Metadata { source: io::Error, path: PathBuf },
+}
 
 fn list(handle: Handle) -> Result<Option<String>> {
     let mut result = String::new();
@@ -175,13 +185,14 @@ fn process(handle: Handle, socket: UnixStream) {
     tokio::spawn(future);
 }
 
-pub fn run(handle: Handle) -> Result<()> {
-    let p = path::Path::new("/var/run");
-    fs::create_dir_all(p)?;
-    let p = p.join(SOCKET_NAME);
-    let _ = fs::remove_file(&p);
+pub fn run(handle: Handle) -> PathResult<()> {
+    let path = Path::new("/var/run");
+    fs::create_dir_all(path).context(Metadata { path })?;
+    let path = path.join(RINGLOG_NAME);
+    let _ = fs::remove_file(&path);
 
-    let server = UnixListener::bind(p)?
+    let server = UnixListener::bind(&path)
+        .context(Metadata { path })?
         .incoming()
         .map_err(|e| error!("accept err: {}", e))
         .for_each(move |socket| {
@@ -194,13 +205,14 @@ pub fn run(handle: Handle) -> Result<()> {
     Ok(())
 }
 
-pub fn logd(log: Arc<RingLog>) -> Result<()> {
-    let p = path::Path::new("/var/run");
-    fs::create_dir_all(p)?;
-    let p = p.join(RINGLOG_NAME);
-    let _ = fs::remove_file(&p);
+pub fn logd(log: Arc<RingLog>) -> PathResult<()> {
+    let path = Path::new("/var/run");
+    fs::create_dir_all(path).context(Metadata { path })?;
+    let path = path.join(RINGLOG_NAME);
+    let _ = fs::remove_file(&path);
 
-    let server = UnixListener::bind(p)?
+    let server = UnixListener::bind(&path)
+        .context(Metadata { path })?
         .incoming()
         .map_err(|e| error!("accept err: {}", e))
         .for_each(move |socket| {
