@@ -189,7 +189,7 @@ pub fn run(handle: Handle) -> PathResult<()> {
     let path = Path::new("/var/run");
     fs::create_dir_all(path).context(Metadata { path })?;
     let path = path.join(RINGLOG_NAME);
-    fs::remove_file(&path).context(Metadata { path: &path })?;
+    let _ = fs::remove_file(&path);
 
     let server = UnixListener::bind(&path)
         .context(Metadata { path })?
@@ -209,7 +209,7 @@ pub fn logd(log: Arc<RingLog>) -> PathResult<()> {
     let path = Path::new("/var/run");
     fs::create_dir_all(path).context(Metadata { path })?;
     let path = path.join(RINGLOG_NAME);
-    fs::remove_file(&path).context(Metadata { path: &path })?;
+    let _ = fs::remove_file(&path);
 
     let server = UnixListener::bind(&path)
         .context(Metadata { path })?
