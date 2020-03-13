@@ -188,11 +188,11 @@ fn process(handle: Handle, socket: UnixStream) {
 pub fn run(handle: Handle) -> PathResult<()> {
     let path = Path::new("/var/run");
     fs::create_dir_all(path).context(Metadata { path })?;
-    let p = path.join(SOCKET_NAME);
-    fs::remove_file(&p).context(Metadata { path: &p })?;
+    let path = path.join(RINGLOG_NAME);
+    fs::remove_file(&path).context(Metadata { path: &path })?;
 
-    let server = UnixListener::bind(&p)
-        .context(Metadata { path: p })?
+    let server = UnixListener::bind(&path)
+        .context(Metadata { path })?
         .incoming()
         .map_err(|e| error!("accept err: {}", e))
         .for_each(move |socket| {
@@ -208,11 +208,11 @@ pub fn run(handle: Handle) -> PathResult<()> {
 pub fn logd(log: Arc<RingLog>) -> PathResult<()> {
     let path = Path::new("/var/run");
     fs::create_dir_all(path).context(Metadata { path })?;
-    let p = path.join(RINGLOG_NAME);
-    fs::remove_file(&p).context(Metadata { path: &p })?;
+    let path = path.join(RINGLOG_NAME);
+    fs::remove_file(&path).context(Metadata { path: &path })?;
 
-    let server = UnixListener::bind(&p)
-        .context(Metadata { path: p })?
+    let server = UnixListener::bind(&path)
+        .context(Metadata { path })?
         .incoming()
         .map_err(|e| error!("accept err: {}", e))
         .for_each(move |socket| {
