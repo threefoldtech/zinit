@@ -22,8 +22,7 @@ pub fn init(buffer: usize, config: &str, debug: bool) -> Result<()> {
         bail!("can only run as pid 1");
     }
     info!("starting init");
-    let res = std::env::set_current_dir(config);
-    match res {
+    match std::env::set_current_dir(config) {
         Ok(_) => {}
         Err(e) => bail!("{}: {}", config, e),
     }
