@@ -22,7 +22,10 @@ pub fn init(buffer: usize, config: &str, debug: bool) -> Result<()> {
         bail!("can only run as pid 1");
     }
     info!("starting init");
-    std::env::set_current_dir(config)?;
+    match std::env::set_current_dir(config) {
+        Ok(_) => {}
+        Err(e) => bail!("{}: {}", config, e),
+    }
 
     let configs = settings::load_dir(".", |file, err| {
         println!(
