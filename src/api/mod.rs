@@ -188,7 +188,7 @@ fn process(handle: Handle, socket: UnixStream) {
 pub fn run(handle: Handle) -> PathResult<()> {
     let path = Path::new("/var/run");
     fs::create_dir_all(path).context(Metadata { path })?;
-    let path = path.join(RINGLOG_NAME);
+    let path = path.join(SOCKET_NAME);
     let _ = fs::remove_file(&path);
 
     let server = UnixListener::bind(&path)

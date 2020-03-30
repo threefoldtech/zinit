@@ -144,7 +144,10 @@ impl APIProtocol for net::UnixStream {}
 fn connect() -> Result<net::UnixStream> {
     let p = path::Path::new("/var/run").join(api::SOCKET_NAME);
 
-    Ok(net::UnixStream::connect(p)?)
+    match net::UnixStream::connect(&p) {
+        Ok(socket) => Ok(socket),
+        Err(err) => bail!("{:?}: {}", p, err),
+    }
 }
 
 /// list command
