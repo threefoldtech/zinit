@@ -30,7 +30,6 @@ fn setup_logger() -> Result<(), fern::InitError> {
     let logger = match std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
         Ok(file) => logger.chain(file),
         Err(err) => {
-            eprintln!("failed to open /dev/kmsg: {}", err);
             logger
         }
     };
