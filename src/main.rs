@@ -29,7 +29,7 @@ fn setup_logger() -> Result<(), fern::InitError> {
         .chain(std::io::stdout());
     let logger = match std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
         Ok(file) => logger.chain(file),
-        Err(err) => {
+        Err(_err) => {
             logger
         }
     };
