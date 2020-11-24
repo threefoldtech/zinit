@@ -13,3 +13,8 @@ A PID replacement that is very lightweight and provide the following requirement
 ## Test docker image
 To play with zinit, we have a testing docker image you can build easily by typing `make docker`.
 The test image currently auto starts redis and open-sshd, it doesn't create key or change passwords (please check [Dockerfile](Dockerfile)).
+
+## Local build notes
+- To build locally you can use `make` 
+- Build requires `rust` and `musl`, `musl-tools` installed
+- Preferred to build with rust version `cargo 1.46.0 (149022b1d 2020-07-17)`
