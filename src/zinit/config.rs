@@ -8,8 +8,8 @@ use std::path::Path;
 
 pub type Services = HashMap<String, Service>;
 
-#[serde(default)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Signal {
     pub stop: String,
 }
@@ -22,9 +22,10 @@ impl Default for Signal {
     }
 }
 
-#[serde(rename_all = "lowercase")]
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Log {
+    None,
     Ring,
     Stdout,
 }
@@ -35,8 +36,8 @@ impl Default for Log {
     }
 }
 
-#[serde(default)]
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct Service {
     /// command to run
     pub exec: String,
@@ -53,18 +54,6 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn new<S: Into<String>>(exec: S, dir: S, one_shot: bool) -> Service {
-        Service {
-            exec: exec.into(),
-            test: "".into(),
-            one_shot: one_shot,
-            after: Vec::new(),
-            signal: Signal::default(),
-            log: Log::Stdout,
-            env: HashMap::new(),
-            dir: dir.into(),
-        }
-    }
     pub fn validate(&self) -> Result<()> {
         use nix::sys::signal::Signal;
         use std::str::FromStr;
@@ -75,27 +64,6 @@ impl Service {
         Signal::from_str(&self.signal.stop.to_uppercase())?;
 
         Ok(())
-    }
-
-    pub fn test_as_service(&self) -> Option<Service> {
-        if self.test.is_empty() {
-            return None;
-        }
-
-        let test = match self.clone() {
-            Service { test, log, env, .. } => Service {
-                exec: test,
-                test: String::default(),
-                one_shot: true,
-                after: vec![],
-                log,
-                env,
-                signal: Signal::default(),
-                dir: "".into(),
-            },
-        };
-
-        Some(test)
     }
 }
 /// load loads a single file
@@ -112,7 +80,7 @@ pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
 
     let file = File::open(p)?;
     let service: Service = yaml::from_reader(&file)?;
-
+    service.validate()?;
     Ok((String::from(name), service))
 }
 

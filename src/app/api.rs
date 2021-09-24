@@ -10,22 +10,22 @@ use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
 use tokio::net::{UnixListener, UnixStream};
 
-#[serde(rename_all = "lowercase")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 struct Response {
     pub state: State,
     pub body: Value,
 }
 
-#[serde(rename_all = "lowercase")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum State {
     Ok,
     Error,
 }
 
-#[serde(rename_all = "lowercase")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub struct Status {
     pub name: String,
     pub pid: u32,
@@ -233,7 +233,7 @@ impl Client {
         let mut con = self.connect().await?;
         con.write_all(b"log\n").await?;
         con.flush().await?;
-        tokio::io::copy(&mut con, &mut out).await;
+        tokio::io::copy(&mut con, &mut out).await?;
         Ok(())
     }
 

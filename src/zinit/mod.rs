@@ -34,8 +34,6 @@ pub enum ZInitError {
     ServiceISUp { name: String },
     #[error("service {name:?} is down")]
     ServiceISDown { name: String },
-    #[error("service {name:?} is not running")]
-    ServiceIsNotRunning { name: String },
 }
 /// Process is a representation of a scheduled/running
 /// service
@@ -296,6 +294,7 @@ impl ZInit {
         drop(table);
 
         let log = match cfg.log {
+            config::Log::None => Log::None,
             config::Log::Stdout => Log::Stdout,
             config::Log::Ring => Log::Ring(format!("{}/test", name.as_ref())),
         };
@@ -411,8 +410,9 @@ impl ZInit {
             }
 
             let log = match config.log {
-                config::Log::Ring => Log::Ring(name.clone()),
+                config::Log::None => Log::None,
                 config::Log::Stdout => Log::Stdout,
+                config::Log::Ring => Log::Ring(name.clone()),
             };
 
             let child = self
