@@ -494,8 +494,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "zinit2"
-version = "0.1.0"
+name = "zinit"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
