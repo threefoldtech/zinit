@@ -124,7 +124,6 @@ async fn main() -> Result<()> {
 
     let socket = matches.value_of("socket").unwrap();
     let debug = matches.is_present("debug");
-
     let result = match matches.subcommand() {
         ("init", Some(matches)) => {
             app::init(

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{Notify, RwLock};
 use tokio::time;
 
 pub trait WaitStatusExt {
@@ -95,17 +95,15 @@ type Table = HashMap<String, ZInitService>;
 pub struct ZInit {
     pm: ProcessManager,
     services: Arc<RwLock<Table>>,
-    notify: broadcast::Sender<()>,
+    notify: Arc<Notify>,
 }
 
 impl ZInit {
     pub fn new(cap: usize) -> ZInit {
-        let (notify, _) = broadcast::channel(1);
-
         ZInit {
             pm: ProcessManager::new(cap),
             services: Arc::new(RwLock::new(Table::new())),
-            notify: notify,
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -237,11 +235,17 @@ impl ZInit {
         let table = self.services.read().await;
         for dep in service.after.iter() {
             can = match table.get(dep) {
-                Some(ps) => match ps.state {
-                    State::Running if !ps.service.one_shot => true,
-                    State::Success => true,
-                    _ => false,
-                },
+                Some(ps) => {
+                    debug!(
+                        "- service {} is {:?} oneshot: {}",
+                        dep, ps.state, ps.service.one_shot
+                    );
+                    match ps.state {
+                        State::Running if !ps.service.one_shot => true,
+                        State::Success => true,
+                        _ => false,
+                    }
+                }
                 //depending on an undefined service. This still can be resolved later
                 //by monitoring the dependency in the future.
                 None => false,
@@ -266,7 +270,7 @@ impl ZInit {
                     if result {
                         self.set(&name, Some(State::Running), None, None).await;
                         // release
-                        let _ = self.notify.send(());
+                        self.notify.notify_waiters();
                         return;
                     }
                     // wait before we try again
@@ -293,15 +297,15 @@ impl ZInit {
         let cfg = service.service.clone();
         drop(table);
 
+        if cfg.test.len() == 0 {
+            return Ok(true);
+        }
+
         let log = match cfg.log {
             config::Log::None => Log::None,
             config::Log::Stdout => Log::Stdout,
             config::Log::Ring => Log::Ring(format!("{}/test", name.as_ref())),
         };
-
-        if cfg.test.len() == 0 {
-            return Ok(true);
-        }
 
         let test = self
             .pm
@@ -395,10 +399,12 @@ impl ZInit {
             // chance to acquire the lock and schedule themselves
             drop(table);
 
-            loop {
-                let mut sig = self.notify.subscribe();
+            'checks: loop {
+                let sig = self.notify.notified();
+                debug!("checking {} if it can schedule", name);
                 if self.can_schedule(&config).await {
-                    break;
+                    debug!("service {} can schedule", name);
+                    break 'checks;
                 }
 
                 self.set(&name, Some(State::Blocked), None, None).await;
@@ -406,7 +412,7 @@ impl ZInit {
                 // as long i am notified that some services status
                 // has changed
                 debug!("service {} is blocked, waiting release", name);
-                let _ = sig.recv().await;
+                sig.await;
             }
 
             let log = match config.log {
@@ -492,6 +498,7 @@ impl ZInit {
 
             if config.one_shot {
                 // we don't need to restart the service anymore
+                let _ = self.notify.notify_waiters();
                 break;
             }
             // we trying again in 2 seconds

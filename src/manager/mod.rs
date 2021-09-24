@@ -118,7 +118,7 @@ impl ProcessManager {
                 for exited in Self::wait_process() {
                     if let Some(pid) = exited.pid() {
                         if let Some(sender) = table.remove(&pid) {
-                            sender.send(exited).unwrap();
+                            let _ = sender.send(exited);
                         }
                     }
                 }
