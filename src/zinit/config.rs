@@ -1,4 +1,4 @@
-use failure::Error;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_yaml as yaml;
 use std::collections::HashMap;
@@ -6,13 +6,6 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::Path;
 
-#[derive(Debug, Fail)]
-enum SettingsError {
-    #[fail(display = "invalid file: {}", name)]
-    InvalidFile { name: String },
-}
-
-type Result<T> = std::result::Result<T, Error>;
 pub type Services = HashMap<String, Service>;
 
 #[serde(default)]
@@ -28,6 +21,7 @@ impl Default for Signal {
         }
     }
 }
+
 #[serde(rename_all = "lowercase")]
 #[derive(Clone, Debug, Deserialize)]
 pub enum Log {
@@ -51,14 +45,26 @@ pub struct Service {
     pub test: String,
     #[serde(rename = "oneshot")]
     pub one_shot: bool,
-    //pub env: HashMap<String, String>,
     pub after: Vec<String>,
     pub signal: Signal,
     pub log: Log,
     pub env: HashMap<String, String>,
+    pub dir: String,
 }
 
 impl Service {
+    pub fn new<S: Into<String>>(exec: S, dir: S, one_shot: bool) -> Service {
+        Service {
+            exec: exec.into(),
+            test: "".into(),
+            one_shot: one_shot,
+            after: Vec::new(),
+            signal: Signal::default(),
+            log: Log::Stdout,
+            env: HashMap::new(),
+            dir: dir.into(),
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         use nix::sys::signal::Signal;
         use std::str::FromStr;
@@ -85,6 +91,7 @@ impl Service {
                 log,
                 env,
                 signal: Signal::default(),
+                dir: "".into(),
             },
         };
 
@@ -98,13 +105,9 @@ pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
     let name = match p.file_stem() {
         Some(name) => match name.to_str() {
             Some(name) => name,
-            None => bail!(SettingsError::InvalidFile {
-                name: String::from(p.to_str().unwrap())
-            }),
+            None => bail!("invalid file name: {}", p.to_str().unwrap()),
         },
-        None => bail!(SettingsError::InvalidFile {
-            name: String::from(p.to_str().unwrap())
-        }),
+        None => bail!("invalid file name: {}", p.to_str().unwrap()),
     };
 
     let file = File::open(p)?;
@@ -113,19 +116,11 @@ pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
     Ok((String::from(name), service))
 }
 
-pub enum Walk {
-    Stop,
-    Continue,
-}
-
 /// walks over a directory and load all configuration files.
 /// the callback is called with any error that is encountered on loading
 /// a file, the callback can decide to either ignore the file, or stop
 /// the directory walking
-pub fn load_dir<T: AsRef<Path>, F>(p: T, cb: F) -> Result<Services>
-where
-    F: Fn(&Path, &Error) -> Walk,
-{
+pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
     let mut services: Services = HashMap::new();
 
     for entry in fs::read_dir(p)? {
@@ -145,12 +140,10 @@ where
 
         let (name, service) = match load(&fp) {
             Ok(content) => content,
-            Err(err) => match cb(&fp, &err) {
-                Walk::Continue => continue,
-                Walk::Stop => {
-                    return Err(err);
-                }
-            },
+            Err(err) => {
+                error!("failed to load config file {:?}: {}", fp, err);
+                continue;
+            }
         };
 
         services.insert(name, service);

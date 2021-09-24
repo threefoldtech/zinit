@@ -1,53 +1,24 @@
-use clap::{App, Arg, SubCommand};
-
-mod api;
-mod app;
-mod manager;
-mod ring;
-#[allow(dead_code)]
-mod settings;
-
+extern crate serde;
 #[macro_use]
-extern crate failure;
-#[macro_use]
-extern crate futures;
+extern crate anyhow;
 #[macro_use]
 extern crate log;
+extern crate tokio;
+use anyhow::Result;
+mod app;
+mod manager;
+mod zinit;
 
-fn setup_logger() -> Result<(), fern::InitError> {
-    let logger = fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "zinit: {} ({}) {}",
-                //chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
-                record.level(),
-                record.target(),
-                message
-            ))
-        })
-        .level(log::LevelFilter::Info)
-        .chain(std::io::stdout());
-    let logger = match std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
-        Ok(file) => logger.chain(file),
-        Err(_err) => {
-            logger
-        }
-    };
-    logger.apply()?;
+use clap::{App, Arg, SubCommand};
 
-    Ok(())
-}
-
-fn main() {
-    match setup_logger() {
-        Ok(_) => {}
-        Err(err) => eprintln!("failed to initialize logging: {}", err),
-    }
-
+#[tokio::main]
+async fn main() -> Result<()> {
     let matches = App::new("zinit")
         .author("ThreeFold Tech, https://github.com/threefoldtech")
         .version("0.1")
         .about("A runit replacement")
+        .arg(Arg::with_name("socket").value_name("SOCKET").short("s").long("socket").default_value("/var/run/zinit.sock").help("path to unix socket"))
+        .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
         .subcommand(
             SubCommand::with_name("init")
                 .arg(
@@ -66,7 +37,6 @@ fn main() {
                     .help("buffer size (in lines) to keep services logs")
                     .default_value("2000")
                 )
-                .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
                 .about("run in init mode, start and maintain configured services"),
         )
         .subcommand(
@@ -152,28 +122,46 @@ fn main() {
         )
         .get_matches();
 
+    let socket = matches.value_of("socket").unwrap();
+    let debug = matches.is_present("debug");
+
     let result = match matches.subcommand() {
-        ("init", Some(matches)) => app::init(
-            matches.value_of("buffer").unwrap().parse().unwrap(),
-            matches.value_of("config").unwrap(),
-            matches.is_present("debug"),
-        ),
-        ("list", _) => app::list(),
-        ("log", Some(matches)) => app::log(matches.value_of("filter")),
-        ("status", Some(matches)) => app::status(matches.value_of("service").unwrap()),
-        ("stop", Some(matches)) => app::stop(matches.value_of("service").unwrap()),
-        ("start", Some(matches)) => app::start(matches.value_of("service").unwrap()),
-        ("forget", Some(matches)) => app::forget(matches.value_of("service").unwrap()),
-        ("monitor", Some(matches)) => app::monitor(matches.value_of("service").unwrap()),
-        ("kill", Some(matches)) => app::kill(
-            matches.value_of("service").unwrap(),
-            matches.value_of("signal").unwrap(),
-        ),
-        _ => app::list(), // default command
+        ("init", Some(matches)) => {
+            app::init(
+                matches.value_of("buffer").unwrap().parse().unwrap(),
+                matches.value_of("config").unwrap(),
+                socket.into(),
+                debug,
+            )
+            .await
+        }
+        ("list", _) => app::list(socket).await,
+        // ("log", Some(matches)) => app::log(matches.value_of("filter")),
+        ("status", Some(matches)) => {
+            app::status(socket, matches.value_of("service").unwrap()).await
+        }
+        ("stop", Some(matches)) => app::stop(socket, matches.value_of("service").unwrap()).await,
+        ("start", Some(matches)) => app::start(socket, matches.value_of("service").unwrap()).await,
+        ("forget", Some(matches)) => {
+            app::forget(socket, matches.value_of("service").unwrap()).await
+        }
+        ("monitor", Some(matches)) => {
+            app::monitor(socket, matches.value_of("service").unwrap()).await
+        }
+        ("kill", Some(matches)) => {
+            app::kill(
+                socket,
+                matches.value_of("service").unwrap(),
+                matches.value_of("signal").unwrap(),
+            )
+            .await
+        }
+        ("log", Some(_)) => app::logs(socket).await,
+        _ => app::list(socket).await, // default command
     };
 
     match result {
-        Ok(_) => {}
+        Ok(_) => Ok(()),
         Err(e) => {
             eprintln!("{}", e);
             std::process::exit(1);

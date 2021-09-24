@@ -1,21 +1,19 @@
 [package]
-name = "zinit"
+name = "zinit2"
 version = "0.1.0"
-authors = ["Muhamad Azmy <muhamad.azmy@codescalers.com>"]
 edition = "2018"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
+anyhow = "1.0"
+tokio = { version = "1.11.0", features = ["full"] }
+shlex ="1.1"
+nix = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.8.8"
-futures = "0.1"
-tokio = "0.1"
-failure = "0.1"
-shlex = "0.1"
-clap = "2.33"
-tokio-signal = "0.2"
-nix = "0.14"
-bitflags = "1.0.4"
+serde_yaml = "0.8"
+serde_json = "1.0"
+fern = "0.6"
 log = "0.4"
-fern = "0.5"
-rand = "0.7.2"
-snafu = "0.6.2"
+thiserror = "1.0"
+clap = "2.33"
