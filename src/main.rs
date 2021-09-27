@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        ("log", Some(_)) => app::logs(socket).await,
+        ("log", Some(matches)) => app::logs(socket, matches.value_of("filter")).await,
         _ => app::list(socket).await, // default command
     };
 

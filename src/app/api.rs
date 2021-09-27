@@ -229,11 +229,37 @@ impl Client {
         }
     }
 
-    pub async fn logs<O: tokio::io::AsyncWrite + Unpin>(&self, mut out: O) -> Result<()> {
+    pub async fn logs<O: tokio::io::AsyncWrite + Unpin, S: AsRef<str>>(
+        &self,
+        mut out: O,
+        filter: Option<S>,
+    ) -> Result<()> {
         let mut con = self.connect().await?;
         con.write_all(b"log\n").await?;
         con.flush().await?;
-        tokio::io::copy(&mut con, &mut out).await?;
+        match filter {
+            None => tokio::io::copy(&mut con, &mut out).await?,
+            Some(filter) => {
+                let filter = format!("{}:", filter.as_ref());
+                let mut stream = BufStream::new(con);
+                loop {
+                    let mut line = String::new();
+                    match stream.read_line(&mut line).await {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(err) => {
+                            bail!("failed to read stream: {}", err);
+                        }
+                    }
+
+                    if line[4..].starts_with(&filter) {
+                        let _ = out.write_all(line.as_bytes()).await;
+                    }
+                }
+                0
+            }
+        };
+
         Ok(())
     }
 
