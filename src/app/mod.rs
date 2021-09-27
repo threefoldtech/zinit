@@ -4,6 +4,7 @@ use crate::zinit;
 use anyhow::{Context, Result};
 use serde_yaml as encoder;
 use std::path::{Path, PathBuf};
+use tokio::fs;
 
 fn logger(level: log::LevelFilter) -> Result<()> {
     let logger = fern::Dispatch::new()
@@ -57,6 +58,14 @@ pub async fn init(
 
     let config = absolute(Path::new(config)).context("failed to get config dire absolute path")?;
     let socket = absolute(Path::new(socket)).context("failed to get socket file absolute path")?;
+
+    if let Some(dir) = socket.parent() {
+        fs::create_dir_all(dir)
+            .await
+            .with_context(|| format!("failed to create directory {:?}", dir))?;
+    }
+
+    let _ = fs::remove_file(&socket).await;
 
     debug!("switching to home dir: {}", config.display());
     std::env::set_current_dir(&config).with_context(|| {

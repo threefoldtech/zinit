@@ -174,14 +174,14 @@ impl ZInit {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        debug!("shutting down");
+        info!("shutting down");
         *self.shutdown.write().await = true;
         loop {
             let table = self.services.read().await;
             let mut to_kill: Vec<String> = Vec::new();
             for (name, service) in table.iter() {
                 if service.state == State::Running || service.state == State::Spawned {
-                    debug!("service '{}' is scheduled for a shutdown", name);
+                    info!("service '{}' is scheduled for a shutdown", name);
                     to_kill.push(name.into());
                 }
             }
@@ -193,9 +193,10 @@ impl ZInit {
             }
 
             for name in to_kill {
-                debug!("stopping '{}'", name);
+                info!("stopping '{}'", name);
                 let _ = self.stop(&name).await;
             }
+            info!("waiting for services to shutdown");
             // sleep for a second before
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
