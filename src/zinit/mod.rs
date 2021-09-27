@@ -34,6 +34,8 @@ pub enum ZInitError {
     ServiceISUp { name: String },
     #[error("service {name:?} is down")]
     ServiceISDown { name: String },
+    #[error("zinit is shutting down")]
+    ShuttingDown,
 }
 /// Process is a representation of a scheduled/running
 /// service
@@ -96,19 +98,43 @@ pub struct ZInit {
     pm: ProcessManager,
     services: Arc<RwLock<Table>>,
     notify: Arc<Notify>,
+    shutdown: Arc<RwLock<bool>>,
+    container: bool,
 }
 
 impl ZInit {
-    pub fn new(cap: usize) -> ZInit {
+    pub fn new(cap: usize, container: bool) -> ZInit {
         ZInit {
             pm: ProcessManager::new(cap),
             services: Arc::new(RwLock::new(Table::new())),
             notify: Arc::new(Notify::new()),
+            shutdown: Arc::new(RwLock::new(false)),
+            container: container,
         }
     }
 
     pub fn serve(&self) {
-        self.pm.start()
+        self.pm.start();
+        if self.container {
+            let m = self.clone();
+            tokio::spawn(m.on_signal());
+        }
+    }
+
+    async fn on_signal(self) {
+        use tokio::signal::unix;
+
+        let mut term = unix::signal(unix::SignalKind::terminate()).unwrap();
+        let mut int = unix::signal(unix::SignalKind::interrupt()).unwrap();
+        let mut hup = unix::signal(unix::SignalKind::hangup()).unwrap();
+        tokio::select! {
+            _ = term.recv() => {},
+            _ = int.recv() => {},
+            _ = hup.recv() => {},
+        };
+
+        debug!("shutdown signal received");
+        let _ = self.shutdown().await;
     }
 
     pub async fn logs(&self) -> Result<Logs> {
@@ -116,6 +142,9 @@ impl ZInit {
     }
 
     pub async fn monitor<S: Into<String>>(&self, name: S, service: config::Service) -> Result<()> {
+        if *self.shutdown.read().await {
+            bail!(ZInitError::ShuttingDown);
+        }
         let name = name.into();
         let mut services = self.services.write().await;
 
@@ -142,6 +171,42 @@ impl ZInit {
         };
 
         Ok(service.clone())
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        debug!("shutting down");
+        *self.shutdown.write().await = true;
+        loop {
+            let table = self.services.read().await;
+            let mut to_kill: Vec<String> = Vec::new();
+            for (name, service) in table.iter() {
+                if service.state == State::Running || service.state == State::Spawned {
+                    debug!("service '{}' is scheduled for a shutdown", name);
+                    to_kill.push(name.into());
+                }
+            }
+
+            drop(table);
+
+            if to_kill.len() == 0 {
+                break;
+            }
+
+            for name in to_kill {
+                debug!("stopping '{}'", name);
+                let _ = self.stop(&name).await;
+            }
+            // sleep for a second before
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+
+        nix::unistd::sync();
+        if self.container {
+            std::process::exit(0);
+        } else {
+            nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT)?;
+        }
+        Ok(())
     }
 
     pub async fn stop<S: AsRef<str>>(&self, name: S) -> Result<()> {
@@ -173,6 +238,9 @@ impl ZInit {
     }
 
     pub async fn start<S: AsRef<str>>(&self, name: S) -> Result<()> {
+        if *self.shutdown.read().await {
+            bail!(ZInitError::ShuttingDown);
+        }
         self.set(name.as_ref(), None, Some(Target::Up), None).await;
         let table = self.services.read().await;
 

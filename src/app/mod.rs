@@ -39,7 +39,13 @@ fn absolute<P: AsRef<Path>>(p: P) -> Result<PathBuf> {
     Ok(result)
 }
 
-pub async fn init(cap: usize, config: &str, socket: &str, debug: bool) -> Result<()> {
+pub async fn init(
+    cap: usize,
+    config: &str,
+    socket: &str,
+    container: bool,
+    debug: bool,
+) -> Result<()> {
     //std::fs::create_dir_all(config)?;
     if let Err(err) = logger(if debug {
         log::LevelFilter::Debug
@@ -60,7 +66,7 @@ pub async fn init(cap: usize, config: &str, socket: &str, debug: bool) -> Result
         )
     })?;
 
-    let init = zinit::ZInit::new(cap);
+    let init = zinit::ZInit::new(cap, container);
 
     init.serve();
 
@@ -80,6 +86,12 @@ pub async fn list(socket: &str) -> Result<()> {
     let client = api::Client::new(socket);
     let results = client.list().await?;
     encoder::to_writer(std::io::stdout(), &results)?;
+    Ok(())
+}
+
+pub async fn shutdown(socket: &str) -> Result<()> {
+    let client = api::Client::new(socket);
+    client.shutdown().await?;
     Ok(())
 }
 

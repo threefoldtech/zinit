@@ -37,11 +37,16 @@ async fn main() -> Result<()> {
                     .help("buffer size (in lines) to keep services logs")
                     .default_value("2000")
                 )
+                .arg(Arg::with_name("container").long("container").help("run in container mode, shutdown on signal"))
                 .about("run in init mode, start and maintain configured services"),
         )
         .subcommand(
             SubCommand::with_name("list")
                 .about("quick view of current known services and their status"),
+        )
+        .subcommand(
+            SubCommand::with_name("shutdown")
+                .about("stop all services and exit"),
         )
         .subcommand(
             SubCommand::with_name("status")
@@ -124,17 +129,20 @@ async fn main() -> Result<()> {
 
     let socket = matches.value_of("socket").unwrap();
     let debug = matches.is_present("debug");
+    //let debug = true;
     let result = match matches.subcommand() {
         ("init", Some(matches)) => {
             app::init(
                 matches.value_of("buffer").unwrap().parse().unwrap(),
                 matches.value_of("config").unwrap(),
                 socket.into(),
+                matches.is_present("container"),
                 debug,
             )
             .await
         }
         ("list", _) => app::list(socket).await,
+        ("shutdown", _) => app::shutdown(socket).await,
         // ("log", Some(matches)) => app::log(matches.value_of("filter")),
         ("status", Some(matches)) => {
             app::status(socket, matches.value_of("service").unwrap()).await

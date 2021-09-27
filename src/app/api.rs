@@ -109,6 +109,7 @@ impl Api {
 
         match parts[0].as_ref() {
             "list" => Self::list(zinit).await,
+            "shutdown" => Self::shutdown(zinit).await,
             "log" => Self::log(stream, zinit).await,
             "start" if parts.len() == 2 => Self::start(&parts[1], zinit).await,
             "stop" if parts.len() == 2 => Self::stop(&parts[1], zinit).await,
@@ -156,6 +157,16 @@ impl Api {
 
     async fn stop<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
         zinit.stop(name).await?;
+        Ok(Value::Null)
+    }
+
+    async fn shutdown(zinit: ZInit) -> Result<Value> {
+        tokio::spawn(async move {
+            if let Err(err) = zinit.shutdown().await {
+                error!("failed to execute shutdown: {}", err);
+            }
+        });
+
         Ok(Value::Null)
     }
 
@@ -266,6 +277,11 @@ impl Client {
     pub async fn list(&self) -> Result<HashMap<String, String>> {
         let response = self.command("list").await?;
         Ok(encoder::from_value(response)?)
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        self.command("shutdown").await?;
+        Ok(())
     }
 
     pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<Status> {
