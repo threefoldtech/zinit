@@ -73,12 +73,12 @@ impl<'a, T> Iterator for BufferIter<'a, T> {
     }
 }
 
-pub type Logs = mpsc::Receiver<String>;
+pub type Logs = mpsc::Receiver<Arc<String>>;
 
 #[derive(Clone)]
 pub struct Ring {
-    buffer: Arc<Mutex<Buffer<String>>>,
-    sender: broadcast::Sender<String>,
+    buffer: Arc<Mutex<Buffer<Arc<String>>>>,
+    sender: broadcast::Sender<Arc<String>>,
 }
 
 impl Ring {
@@ -91,13 +91,14 @@ impl Ring {
     }
 
     pub async fn push(&self, line: String) -> Result<()> {
-        self.buffer.lock().await.push(line.clone());
-        self.sender.send(line.clone())?;
+        let line = Arc::new(line.clone());
+        self.buffer.lock().await.push(Arc::clone(&line));
+        self.sender.send(line)?;
         Ok(())
     }
 
     pub async fn stream(&self) -> Result<Logs> {
-        let (tx, stream) = mpsc::channel::<String>(100);
+        let (tx, stream) = mpsc::channel::<Arc<String>>(100);
         let mut rx = self.sender.subscribe();
         let buffer = self
             .buffer
@@ -108,7 +109,7 @@ impl Ring {
             .collect::<Vec<_>>();
         tokio::spawn(async move {
             for item in buffer {
-                let _ = tx.send(item).await;
+                let _ = tx.send(Arc::clone(&item)).await;
             }
 
             loop {
@@ -116,7 +117,7 @@ impl Ring {
                     Ok(line) => line,
                     Err(RecvError::Closed) => break,
                     Err(RecvError::Lagged(n)) => {
-                        format!("[-] zinit: {} lines dropped", n)
+                        Arc::new(format!("[-] zinit: {} lines dropped", n))
                     }
                 };
 
