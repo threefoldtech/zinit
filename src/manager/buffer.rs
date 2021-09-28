@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::{mpsc, Mutex};
 
-struct Buffer<T: Clone> {
+struct Buffer<T> {
     inner: Vec<T>,
     at: usize,
 }
@@ -33,11 +33,42 @@ impl<T: Clone> Buffer<T> {
 
         self.at = (self.at + 1) % self.cap();
     }
+}
 
-    pub fn iter(&self) -> Vec<T> {
-        let (a, b) = self.inner.split_at(self.at);
+impl<'a, T: 'a> IntoIterator for &'a Buffer<T> {
+    type IntoIter = BufferIter<'a, T>;
+    type Item = &'a T;
 
-        b.iter().cloned().chain(a.iter().cloned()).collect()
+    fn into_iter(self) -> Self::IntoIter {
+        let (second, first) = self.inner.split_at(self.at);
+
+        BufferIter {
+            first,
+            second,
+            index: 0,
+        }
+    }
+}
+
+pub struct BufferIter<'a, T> {
+    first: &'a [T],
+    second: &'a [T],
+    index: usize,
+}
+
+impl<'a, T> Iterator for BufferIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let index = self.index;
+        self.index += 1;
+        if index < self.first.len() {
+            Some(&self.first[index])
+        } else if index - self.first.len() < self.second.len() {
+            Some(&self.second[index - self.first.len()])
+        } else {
+            None
+        }
     }
 }
 
@@ -67,7 +98,13 @@ impl Ring {
     pub async fn stream(&self) -> Result<Logs> {
         let (tx, stream) = mpsc::channel::<String>(100);
         let mut rx = self.sender.subscribe();
-        let buffer = self.buffer.lock().await.iter();
+        let buffer = self
+            .buffer
+            .lock()
+            .await
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
         tokio::spawn(async move {
             for item in buffer {
                 let _ = tx.send(item).await;
