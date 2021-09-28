@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{mpsc, Mutex};
 
 struct Buffer<T> {
@@ -110,9 +111,18 @@ impl Ring {
                 let _ = tx.send(item).await;
             }
 
-            while let Ok(line) = rx.recv().await {
-                if let Err(_) = tx.send(line).await {
+            loop {
+                let line = match rx.recv().await {
+                    Ok(line) => line,
+                    Err(RecvError::Closed) => break,
+                    Err(RecvError::Lagged(n)) => {
+                        format!("[-] zinit: {} lines dropped", n)
+                    }
+                };
+
+                if let Err(err) = tx.send(line).await {
                     // log here!
+                    error!("failed to send line to stream: {}", err);
                     break;
                 }
             }
