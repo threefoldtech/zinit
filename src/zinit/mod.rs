@@ -18,10 +18,7 @@ pub trait WaitStatusExt {
 
 impl WaitStatusExt for WaitStatus {
     fn success(&self) -> bool {
-        match *self {
-            WaitStatus::Exited(_, code) if code == 0 => true,
-            _ => false,
-        }
+        matches!(self, WaitStatus::Exited(_, code) if *code == 0)
     }
 }
 #[derive(Error, Debug)]
@@ -55,7 +52,7 @@ impl ZInitService {
         ZInitService {
             pid: Pid::from_raw(0),
             state,
-            service: service,
+            service,
             target: Target::Up,
             scheduled: false,
         }
@@ -91,7 +88,7 @@ pub enum State {
     Failure,
 }
 
-type Table = HashMap<String, ZInitService>;
+type Table = HashMap<String, Arc<RwLock<ZInitService>>>;
 
 #[derive(Clone)]
 pub struct ZInit {
@@ -109,7 +106,7 @@ impl ZInit {
             services: Arc::new(RwLock::new(Table::new())),
             notify: Arc::new(Notify::new()),
             shutdown: Arc::new(RwLock::new(false)),
-            container: container,
+            container,
         }
     }
 
@@ -149,13 +146,14 @@ impl ZInit {
         let mut services = self.services.write().await;
 
         if services.contains_key(&name) {
-            bail!(ZInitError::ServiceAlreadyMonitored { name: name })
+            bail!(ZInitError::ServiceAlreadyMonitored { name })
         }
 
-        services.insert(name.clone(), ZInitService::new(service, State::Unknown));
+        let service = Arc::new(RwLock::new(ZInitService::new(service, State::Unknown)));
+        services.insert(name.clone(), Arc::clone(&service));
         let m = self.clone();
         debug!("service '{}' monitored", name);
-        tokio::spawn(m.watch(name));
+        tokio::spawn(m.watch(name, service));
         Ok(())
     }
 
@@ -170,7 +168,8 @@ impl ZInit {
             }),
         };
 
-        Ok(service.clone())
+        let service = service.read().await.clone();
+        Ok(service)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -180,6 +179,7 @@ impl ZInit {
             let table = self.services.read().await;
             let mut to_kill: Vec<String> = Vec::new();
             for (name, service) in table.iter() {
+                let service = service.read().await;
                 if service.state == State::Running || service.state == State::Spawned {
                     info!("service '{}' is scheduled for a shutdown", name);
                     to_kill.push(name.into());
@@ -188,7 +188,7 @@ impl ZInit {
 
             drop(table);
 
-            if to_kill.len() == 0 {
+            if to_kill.is_empty() {
                 break;
             }
 
@@ -211,16 +211,16 @@ impl ZInit {
     }
 
     pub async fn stop<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let mut table = self.services.write().await;
-        let service = table.get_mut(name.as_ref());
+        let table = self.services.read().await;
+        let service = table.get(name.as_ref());
 
-        let mut service = match service {
+        let service = match service {
             Some(service) => service,
             None => bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
             }),
         };
-
+        let mut service = service.write().await;
         service.target = Target::Down;
         let signal = match signal::Signal::from_str(&service.service.signal.stop.to_uppercase()) {
             Ok(signal) => signal,
@@ -245,14 +245,15 @@ impl ZInit {
         self.set(name.as_ref(), None, Some(Target::Up), None).await;
         let table = self.services.read().await;
 
-        if table.get(name.as_ref()).is_none() {
-            bail!(ZInitError::UnknownService {
+        let service = match table.get(name.as_ref()) {
+            Some(service) => service,
+            None => bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
-            })
-        }
+            }),
+        };
 
         let m = self.clone();
-        tokio::spawn(m.watch(name.as_ref().into()));
+        tokio::spawn(m.watch(name.as_ref().into(), Arc::clone(service)));
         Ok(())
     }
 
@@ -265,12 +266,14 @@ impl ZInit {
             }),
         };
 
+        let service = service.read().await;
         if service.target == Target::Up || service.pid != Pid::from_raw(0) {
             bail!(ZInitError::ServiceISUp {
                 name: name.as_ref().into()
             })
         }
 
+        drop(service);
         table.remove(name.as_ref());
         Ok(())
     }
@@ -284,6 +287,7 @@ impl ZInit {
             }),
         };
 
+        let service = service.read().await;
         if service.pid == Pid::from_raw(0) {
             bail!(ZInitError::ServiceISDown {
                 name: name.as_ref().into(),
@@ -305,6 +309,7 @@ impl ZInit {
         for dep in service.after.iter() {
             can = match table.get(dep) {
                 Some(ps) => {
+                    let ps = ps.read().await;
                     debug!(
                         "- service {} is {:?} oneshot: {}",
                         dep, ps.state, ps.service.one_shot
@@ -329,10 +334,10 @@ impl ZInit {
         can
     }
 
-    async fn test<S: Into<String>>(self, name: S) {
+    async fn test<S: Into<String>>(self, name: S, cfg: config::Service) {
         let name = name.into();
         loop {
-            let result = self.test_once(&name).await;
+            let result = self.test_once(&name, &cfg).await;
 
             match result {
                 Ok(result) => {
@@ -352,21 +357,8 @@ impl ZInit {
         }
     }
 
-    async fn test_once<S: AsRef<str>>(&self, name: S) -> Result<bool> {
-        let table = self.services.read().await;
-        let service = match table.get(name.as_ref()) {
-            Some(service) => service,
-            None => bail!("service not found"),
-        };
-
-        if service.state != State::Spawned {
-            return Ok(true);
-        }
-
-        let cfg = service.service.clone();
-        drop(table);
-
-        if cfg.test.len() == 0 {
+    async fn test_once<S: AsRef<str>>(&self, name: S, cfg: &config::Service) -> Result<bool> {
+        if cfg.test.is_empty() {
             return Ok(true);
         }
 
@@ -389,7 +381,7 @@ impl ZInit {
             return Ok(true);
         }
 
-        return Ok(false);
+        Ok(false)
     }
 
     async fn set(
@@ -399,12 +391,13 @@ impl ZInit {
         target: Option<Target>,
         scheduled: Option<bool>,
     ) {
-        let mut table = self.services.write().await;
-        let service = match table.get_mut(name) {
+        let table = self.services.read().await;
+        let service = match table.get(name) {
             Some(service) => service,
             None => return,
         };
 
+        let mut service = service.write().await;
         if let Some(state) = state {
             service.state = state;
         }
@@ -418,18 +411,10 @@ impl ZInit {
         }
     }
 
-    async fn watch(self, name: String) {
+    async fn watch(self, name: String, input: Arc<RwLock<ZInitService>>) {
         let name = name.clone();
-        let mut table = self.services.write().await;
 
-        let mut service = match table.get_mut(&name) {
-            Some(ps) => ps,
-            None => {
-                // process has been forgotten
-                return;
-            }
-        };
-
+        let mut service = input.write().await;
         if service.target == Target::Down {
             debug!("service '{}' target is down", name);
             return;
@@ -441,20 +426,12 @@ impl ZInit {
         }
 
         service.scheduled = true;
-        drop(table);
+        drop(service);
 
         loop {
             let name = name.clone();
-            let table = self.services.read().await;
 
-            let service = match table.get(&name) {
-                Some(ps) => ps,
-                None => {
-                    // process has been forgotten
-                    break;
-                }
-            };
-
+            let service = input.read().await;
             if service.target == Target::Down {
                 // we check target in loop in case service have
                 // been set down.
@@ -466,7 +443,7 @@ impl ZInit {
 
             // so we drop the table to give other services
             // chance to acquire the lock and schedule themselves
-            drop(table);
+            drop(service);
 
             'checks: loop {
                 let sig = self.notify.notified();
@@ -498,17 +475,7 @@ impl ZInit {
                 )
                 .await;
 
-            let mut table = self.services.write().await;
-            let mut service = match table.get_mut(&name) {
-                Some(service) => service,
-                None => {
-                    // service is gone, we need to make sure child is gone as well
-                    if let Ok(child) = child {
-                        let _ = child.signal(signal::Signal::SIGKILL);
-                    }
-                    break;
-                }
-            };
+            let mut service = input.write().await;
 
             let child = match child {
                 Ok(child) => {
@@ -529,13 +496,14 @@ impl ZInit {
             if config.one_shot {
                 service.state = State::Running;
             }
-            // we don't lock the table here because this can take forever
+            // we don't lock the here here because this can take forever
             // to finish. so we allow other services to schedule
-            drop(table);
+            drop(service);
+
             let mut handler = None;
             if !config.one_shot {
                 let m = self.clone();
-                handler = Some(tokio::spawn(m.test(name.clone())));
+                handler = Some(tokio::spawn(m.test(name.clone(), config.clone())));
             }
 
             let result = child.wait().await;
@@ -543,14 +511,7 @@ impl ZInit {
                 handler.abort();
             }
 
-            let mut table = self.services.write().await;
-            let mut service = match table.get_mut(&name) {
-                Some(service) => service,
-                None => {
-                    break;
-                }
-            };
-
+            let mut service = input.write().await;
             service.pid = Pid::from_raw(0);
             match result {
                 Err(err) => {
@@ -565,6 +526,7 @@ impl ZInit {
                 }
             };
 
+            drop(service);
             if config.one_shot {
                 // we don't need to restart the service anymore
                 let _ = self.notify.notify_waiters();
