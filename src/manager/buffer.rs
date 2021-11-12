@@ -121,7 +121,7 @@ impl Ring {
                     }
                 };
 
-                if let Err(_) = tx.send(line).await {
+                if tx.send(line).await.is_err() {
                     // client disconnected.
                     break;
                 }

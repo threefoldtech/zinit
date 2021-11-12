@@ -18,10 +18,7 @@ pub trait WaitStatusExt {
 
 impl WaitStatusExt for WaitStatus {
     fn success(&self) -> bool {
-        match *self {
-            WaitStatus::Exited(_, code) if code == 0 => true,
-            _ => false,
-        }
+        matches!(self, WaitStatus::Exited(_, code) if *code == 0)
     }
 }
 #[derive(Error, Debug)]
@@ -55,7 +52,7 @@ impl ZInitService {
         ZInitService {
             pid: Pid::from_raw(0),
             state,
-            service: service,
+            service,
             target: Target::Up,
             scheduled: false,
         }
@@ -109,7 +106,7 @@ impl ZInit {
             services: Arc::new(RwLock::new(Table::new())),
             notify: Arc::new(Notify::new()),
             shutdown: Arc::new(RwLock::new(false)),
-            container: container,
+            container,
         }
     }
 
@@ -149,7 +146,7 @@ impl ZInit {
         let mut services = self.services.write().await;
 
         if services.contains_key(&name) {
-            bail!(ZInitError::ServiceAlreadyMonitored { name: name })
+            bail!(ZInitError::ServiceAlreadyMonitored { name })
         }
 
         let service = Arc::new(RwLock::new(ZInitService::new(service, State::Unknown)));
@@ -191,7 +188,7 @@ impl ZInit {
 
             drop(table);
 
-            if to_kill.len() == 0 {
+            if to_kill.is_empty() {
                 break;
             }
 
@@ -256,7 +253,7 @@ impl ZInit {
         };
 
         let m = self.clone();
-        tokio::spawn(m.watch(name.as_ref().into(), Arc::clone(&service)));
+        tokio::spawn(m.watch(name.as_ref().into(), Arc::clone(service)));
         Ok(())
     }
 
@@ -361,7 +358,7 @@ impl ZInit {
     }
 
     async fn test_once<S: AsRef<str>>(&self, name: S, cfg: &config::Service) -> Result<bool> {
-        if cfg.test.len() == 0 {
+        if cfg.test.is_empty() {
             return Ok(true);
         }
 
@@ -384,7 +381,7 @@ impl ZInit {
             return Ok(true);
         }
 
-        return Ok(false);
+        Ok(false)
     }
 
     async fn set(

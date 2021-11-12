@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
             app::init(
                 matches.value_of("buffer").unwrap().parse().unwrap(),
                 matches.value_of("config").unwrap(),
-                socket.into(),
+                socket,
                 matches.is_present("container"),
                 debug,
             )

@@ -99,10 +99,7 @@ pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
 
         let fp = entry.path();
 
-        if !match fp.extension() {
-            Some(ext) if ext == OsStr::new("yaml") => true,
-            _ => false,
-        } {
+        if !matches!(fp.extension(), Some(ext) if ext == OsStr::new("yaml")) {
             continue;
         }
 

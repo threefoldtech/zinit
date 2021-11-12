@@ -42,7 +42,7 @@ pub struct Api {
 impl Api {
     pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P) -> Api {
         Api {
-            zinit: zinit,
+            zinit,
             socket: socket.as_ref().to_path_buf(),
         }
     }
@@ -50,11 +50,8 @@ impl Api {
     pub async fn serve(&self) -> Result<()> {
         let listener = UnixListener::bind(&self.socket).context("failed to listen for socket")?;
         loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    tokio::spawn(Self::handle(stream, self.zinit.clone()));
-                }
-                Err(_) => { /* connection failed */ }
+            if let Ok((stream, _addr)) = listener.accept().await {
+                tokio::spawn(Self::handle(stream, self.zinit.clone()));
             }
         }
     }
@@ -69,8 +66,8 @@ impl Api {
 
         let response = match Self::process(cmd, &mut stream, zinit).await {
             Ok(body) => Response {
+                body,
                 state: State::Ok,
-                body: body,
             },
             Err(err) => Response {
                 state: State::Error,
@@ -103,7 +100,7 @@ impl Api {
             None => bail!("invalid command syntax"),
         };
 
-        if parts.len() == 0 {
+        if parts.is_empty() {
             bail!("unknown command");
         }
 

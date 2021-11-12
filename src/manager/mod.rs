@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use nix::sys::signal;
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd::Pid;
-use shlex;
 use std::fs::File as StdFile;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::IntoRawFd;
@@ -35,7 +34,7 @@ pub struct Child {
 
 impl Child {
     pub fn new(pid: Pid, ch: WaitChannel) -> Child {
-        Child { pid: pid, ch: ch }
+        Child { pid, ch }
     }
 
     pub async fn wait(self) -> Result<WaitStatus> {
@@ -53,8 +52,8 @@ impl Process {
         };
 
         Process {
+            env,
             cmd: cmd.into(),
-            env: env,
             cwd: cwd.into(),
         }
     }
@@ -147,13 +146,13 @@ impl ProcessManager {
 
     pub async fn run(&self, cmd: Process, log: Log) -> Result<Child> {
         let args = shlex::split(&cmd.cmd).context("failed to parse command")?;
-        if args.len() == 0 {
+        if args.is_empty() {
             bail!("invalid command");
         }
 
         let mut child = Command::new(&args[0]);
 
-        let child = if cmd.cwd.len() > 0 {
+        let child = if !cmd.cwd.is_empty() {
             child.current_dir(&cmd.cwd)
         } else {
             child.current_dir("/")
