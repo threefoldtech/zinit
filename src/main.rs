@@ -12,7 +12,7 @@ mod app;
 mod manager;
 mod zinit;
 
-const GIT_VERSION: &str = git_version!(args = ["--tags", "--dirty=-modified"]);
+const GIT_VERSION: &str = git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
