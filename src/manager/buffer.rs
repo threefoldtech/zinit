@@ -121,9 +121,8 @@ impl Ring {
                     }
                 };
 
-                if let Err(err) = tx.send(line).await {
-                    // log here!
-                    error!("failed to send line to stream: {}", err);
+                if let Err(_) = tx.send(line).await {
+                    // client disconnected.
                     break;
                 }
             }

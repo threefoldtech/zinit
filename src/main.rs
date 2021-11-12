@@ -5,17 +5,20 @@ extern crate anyhow;
 extern crate log;
 extern crate tokio;
 use anyhow::Result;
+use clap::{App, Arg, SubCommand};
+use git_version::git_version;
+
 mod app;
 mod manager;
 mod zinit;
 
-use clap::{App, Arg, SubCommand};
+const GIT_VERSION: &str = git_version!();
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let matches = App::new("zinit")
         .author("ThreeFold Tech, https://github.com/threefoldtech")
-        .version("0.1")
+        .version(GIT_VERSION)
         .about("A runit replacement")
         .arg(Arg::with_name("socket").value_name("SOCKET").short("s").long("socket").default_value("/var/run/zinit.sock").help("path to unix socket"))
         .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
