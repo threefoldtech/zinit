@@ -41,10 +41,6 @@ impl Child {
     pub async fn wait(self) -> Result<WaitStatus> {
         Ok(self.ch.await?)
     }
-
-    pub fn signal(&self, sig: signal::Signal) -> Result<()> {
-        Ok(signal::kill(self.pid, sig)?)
-    }
 }
 
 type Handler = oneshot::Sender<WaitStatus>;
