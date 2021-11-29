@@ -70,6 +70,7 @@ pub enum Log {
 pub struct ProcessManager {
     table: Arc<Mutex<HashMap<Pid, Handler>>>,
     ring: buffer::Ring,
+    env: Environ,
 }
 
 impl ProcessManager {
@@ -77,6 +78,7 @@ impl ProcessManager {
         ProcessManager {
             table: Arc::new(Mutex::new(HashMap::new())),
             ring: buffer::Ring::new(cap),
+            env: Environ::new(),
         }
     }
 
@@ -158,7 +160,7 @@ impl ProcessManager {
             child.current_dir("/")
         };
 
-        let child = child.args(&args[1..]).envs(cmd.env);
+        let child = child.args(&args[1..]).envs(&self.env.0).envs(cmd.env);
 
         let child = match log {
             Log::None => child.stdin(Stdio::null()).stdout(Stdio::null()),
@@ -189,5 +191,51 @@ impl ProcessManager {
         table.insert(pid, tx);
 
         Ok(Child::new(pid, rx))
+    }
+}
+
+#[derive(Clone)]
+struct Environ(HashMap<String, String>);
+
+impl Environ {
+    fn new() -> Environ {
+        let mut env = HashMap::new();
+        for p in &["/etc/environment"] {
+            let r = match Environ::parse(p) {
+                Ok(r) => r,
+                Err(_) => {
+                    //skip
+                    continue;
+                }
+            };
+
+            env.extend(r);
+        }
+
+        Environ(env)
+    }
+
+    fn parse<P>(p: P) -> Result<HashMap<String, String>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let mut m = HashMap::new();
+        let txt = std::fs::read_to_string(p)?;
+        for line in txt.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            let key = String::from(parts[0]);
+            let value = match parts.len() {
+                2 => String::from(parts[1]),
+                _ => String::default(),
+            };
+            //m.into_iter()
+            m.insert(key, value);
+        }
+
+        Ok(m)
     }
 }
