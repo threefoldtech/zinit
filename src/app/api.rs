@@ -135,7 +135,7 @@ impl Api {
         let mut map: HashMap<String, String> = HashMap::new();
         for service in services {
             let state = zinit.status(&service).await?;
-            map.insert(service, format!("{:?}", state.state));
+            map.insert(service, format!("{:?}", state.get_state()));
         }
 
         Ok(encoder::to_value(map)?)
@@ -185,13 +185,13 @@ impl Api {
         let result = Status {
             name: name.as_ref().into(),
             pid: status.pid.as_raw() as u32,
-            state: format!("{:?}", status.state),
+            state: format!("{:?}", status.get_state()),
             target: format!("{:?}", status.target),
             after: {
                 let mut after = HashMap::new();
                 for service in status.service.after {
                     let status = zinit.status(&service).await?;
-                    after.insert(service, format!("{:?}", status.state));
+                    after.insert(service, format!("{:?}", status.get_state()));
                 }
                 after
             },

@@ -1,7 +1,10 @@
 pub mod config;
-
+pub mod ord;
 use crate::manager::{Log, Logs, Process, ProcessManager};
+use crate::zinit::ord::ProcessDAG;
+use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
 use anyhow::Result;
+use futures::future::join_all;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
@@ -9,8 +12,11 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::sync::{Notify, RwLock};
 use tokio::time;
+use tokio::time::timeout;
 
 pub trait WaitStatusExt {
     fn success(&self) -> bool;
@@ -36,26 +42,62 @@ pub enum ZInitError {
 }
 /// Process is a representation of a scheduled/running
 /// service
-#[derive(Clone)]
 pub struct ZInitService {
     pub pid: Pid,
-    pub state: State,
     // config is the service configuration
     pub service: config::Service,
     // target is the target state of the service (up, down)
     pub target: Target,
     pub scheduled: bool,
+    pub state_rx: watch::Receiver<State>,
+    // no sender on cloned objects
+    // the rx can be used even on clones
+    state_tx: Option<watch::Sender<State>>,
+    state: State,
 }
 
+impl Clone for ZInitService {
+    fn clone(&self) -> Self {
+        ZInitService {
+            pid: self.pid,
+            state: self.state.clone(),
+            service: self.service.clone(),
+            target: self.target.clone(),
+            scheduled: self.scheduled.clone(),
+            state_rx: self.state_rx.clone(),
+            state_tx: None,
+        }
+    }
+}
 impl ZInitService {
     fn new(service: config::Service, state: State) -> ZInitService {
+        let (state_tx, state_rx) = watch::channel(state.clone());
         ZInitService {
             pid: Pid::from_raw(0),
             state,
             service,
             target: Target::Up,
             scheduled: false,
+            state_rx: state_rx,
+            state_tx: Some(state_tx),
         }
+    }
+
+    pub fn set_state(&mut self, state: State) {
+        debug!(
+            "setting state of service {} to {:?}",
+            self.service.exec, state
+        );
+        self.state = state.clone();
+        if let Some(tx) = &self.state_tx {
+            if let Err(e) = tx.send(state) {
+                warn!("couldn't send a notification on the state channel {}", e);
+            }
+        }
+    }
+
+    pub fn get_state(&self) -> State {
+        self.state.clone()
     }
 }
 
@@ -171,31 +213,92 @@ impl ZInit {
         let service = service.read().await.clone();
         Ok(service)
     }
+    async fn kill_wait(
+        &self,
+        name: String,
+        ch: mpsc::Sender<String>,
+        rx: &mut watch::Receiver<State>,
+    ) -> Result<()> {
+        debug!("kill_wait {}", name);
+        let cp = name.clone();
+        let fut = timeout(std::time::Duration::from_secs(10), async move {
+            while let Ok(_) = rx.changed().await {
+                let new_state = (*rx.borrow()).clone();
+                debug!(
+                    "received a state change notification for service {} to {:?}",
+                    cp, new_state
+                );
+                if new_state != State::Running && new_state != State::Spawned {
+                    return;
+                }
+            }
+        });
+        // no guarantee that rx started listening?
+        // but this is how it's used in the docs
+        if let Err(e) = self.stop(name.clone()).await {
+            error!("couldn't shutdown service {}: {}", name.clone(), e);
+            ch.send(name).await?;
+            return Err(e);
+        }
+        let _ = fut.await;
+        debug!("sending to the death channel {}", name.clone());
+        ch.send(name.clone()).await?;
+        Ok(())
+    }
+    async fn kill_process_tree(
+        &self,
+        name: String,
+        dag: &mut ProcessDAG,
+        mut state_channels: HashMap<String, watch::Receiver<State>>,
+    ) -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(32);
+        tx.send(name).await?;
+        let mut futs = vec![];
+        while let Some(name) = rx.recv().await {
+            debug!("{} has been killed (or was inactive) adding its children", name);
+            for child in dag.adj.get(&name).unwrap_or(&Vec::new()) {
+                let child_indegree: &mut u32 = dag.indegree.entry(child.clone()).or_insert(0);
+                *child_indegree -= 1;
+                debug!("decrementing child {} indegree to {}", child, child_indegree);
+                if *child_indegree == 0 {
+                    let state_rx = state_channels.get_mut(child);
+                    if let None = state_rx {
+                        // not an active service
+                        tx.send(child.to_string()).await?;
+                        continue;
+                    }
+                    futs.push(self.kill_wait(
+                        child.to_string(),
+                        tx.clone(),
+                        state_rx.unwrap(),
+                    ).await);
+                }
+            }
+        }
+        // join_all(futs).await;
+        Ok(())
+    }
 
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down");
         *self.shutdown.write().await = true;
         loop {
             let table = self.services.read().await;
-            let mut to_kill: Vec<String> = Vec::new();
+            let mut dag = service_dependency_order(&table).await;
+            let mut state_channels: HashMap<String, watch::Receiver<State>> = HashMap::new();
             for (name, service) in table.iter() {
                 let service = service.read().await;
                 if service.state == State::Running || service.state == State::Spawned {
                     info!("service '{}' is scheduled for a shutdown", name);
-                    to_kill.push(name.into());
+                    state_channels.insert(name.into(), service.state_rx.clone());
                 }
             }
-
             drop(table);
-
-            if to_kill.is_empty() {
+            if dag.adj.len() == 0 {
                 break;
             }
-
-            for name in to_kill {
-                info!("stopping '{}'", name);
-                let _ = self.stop(&name).await;
-            }
+            self.kill_process_tree(DUMMY_ROOT.into(), &mut dag, state_channels)
+                .await?;
             info!("waiting for services to shutdown");
             // sleep for a second before
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -399,7 +502,7 @@ impl ZInit {
 
         let mut service = service.write().await;
         if let Some(state) = state {
-            service.state = state;
+            service.set_state(state);
         }
 
         if let Some(target) = target {
@@ -479,7 +582,7 @@ impl ZInit {
 
             let child = match child {
                 Ok(child) => {
-                    service.state = State::Spawned;
+                    service.set_state(State::Spawned);
                     service.pid = child.pid;
                     child
                 }
@@ -488,13 +591,13 @@ impl ZInit {
                     // this can be duo to a bad command or exe not found.
                     // set service to failure.
                     error!("service {} failed to start: {}", name, err);
-                    service.state = State::Failure;
+                    service.set_state(State::Failure);
                     break;
                 }
             };
 
             if config.one_shot {
-                service.state = State::Running;
+                service.set_state(State::Running);
             }
             // we don't lock the here here because this can take forever
             // to finish. so we allow other services to schedule
@@ -516,14 +619,12 @@ impl ZInit {
             match result {
                 Err(err) => {
                     error!("failed to read service '{}' status: {}", name, err);
-                    service.state = State::Unknown;
+                    service.set_state(State::Unknown);
                 }
-                Ok(status) => {
-                    service.state = match status.success() {
-                        true => State::Success,
-                        false => State::Error(status),
-                    }
-                }
+                Ok(status) => service.set_state(match status.success() {
+                    true => State::Success,
+                    false => State::Error(status),
+                }),
             };
 
             drop(service);
