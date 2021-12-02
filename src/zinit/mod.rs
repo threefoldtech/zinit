@@ -227,12 +227,12 @@ impl ZInit {
             std::time::Duration::from_secs(shutdown_timeout),
             async move {
                 while rx.changed().await.is_ok() {
-                    let new_state = (*rx.borrow()).clone();
+                    let new_state = rx.borrow();
                     debug!(
                         "received a state change notification for service {} to {:?}",
                         cp, new_state
                     );
-                    if new_state != State::Running && new_state != State::Spawned {
+                    if *new_state != State::Running && *new_state != State::Spawned {
                         return;
                     }
                 }
