@@ -304,35 +304,25 @@ impl ZInit {
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down");
         *self.shutdown.write().await = true;
-        loop {
-            let mut state_channels: HashMap<String, watch::Receiver<State>> = HashMap::new();
-            let mut shutdown_timeouts: HashMap<String, u64> = HashMap::new();
-            let table = self.services.read().await;
-            for (name, service) in table.iter() {
-                let service = service.read().await;
-                if service.state == State::Running || service.state == State::Spawned {
-                    info!("service '{}' is scheduled for a shutdown", name);
-                    state_channels.insert(name.into(), service.state_rx.clone());
-                    let mut timeout = service.service.shutdown_timeout;
-                    if timeout == 0 {
-                        timeout = DEFAULT_SHUTDOWN_TIMEOUT;
-                    }
-                    shutdown_timeouts.insert(name.into(), timeout);
+        let mut state_channels: HashMap<String, watch::Receiver<State>> = HashMap::new();
+        let mut shutdown_timeouts: HashMap<String, u64> = HashMap::new();
+        let table = self.services.read().await;
+        for (name, service) in table.iter() {
+            let service = service.read().await;
+            if service.state == State::Running || service.state == State::Spawned {
+                info!("service '{}' is scheduled for a shutdown", name);
+                state_channels.insert(name.into(), service.state_rx.clone());
+                let mut timeout = service.service.shutdown_timeout;
+                if timeout == 0 {
+                    timeout = DEFAULT_SHUTDOWN_TIMEOUT;
                 }
+                shutdown_timeouts.insert(name.into(), timeout);
             }
-            drop(table);
-            if state_channels.is_empty() {
-                break;
-            }
-            let dag = service_dependency_order(self.services.clone()).await;
-            self.kill_process_tree(dag, state_channels, shutdown_timeouts)
-                .await?;
-            info!("waiting for services to shutdown");
-            // Q: not needed anymore?
-            // sleep for a second before
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-
+        drop(table);
+        let dag = service_dependency_order(self.services.clone()).await;
+        self.kill_process_tree(dag, state_channels, shutdown_timeouts)
+            .await?;
         nix::unistd::sync();
         if self.container {
             std::process::exit(0);
