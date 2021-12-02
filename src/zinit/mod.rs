@@ -18,6 +18,8 @@ use tokio::sync::{Notify, RwLock};
 use tokio::time;
 use tokio::time::timeout;
 
+const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 10; // in seconds
+
 pub trait WaitStatusExt {
     fn success(&self) -> bool;
 }
@@ -50,25 +52,21 @@ pub struct ZInitService {
     pub target: Target,
     pub scheduled: bool,
     pub state_rx: watch::Receiver<State>,
-    // no sender on cloned objects
-    // the rx can be used even on clones
-    state_tx: Option<watch::Sender<State>>,
+    // if we need cloning, we can make it multiple consumer/ multiple producor?
+    state_tx: watch::Sender<State>,
     state: State,
 }
 
-impl Clone for ZInitService {
-    fn clone(&self) -> Self {
-        ZInitService {
-            pid: self.pid,
-            state: self.state.clone(),
-            service: self.service.clone(),
-            target: self.target.clone(),
-            scheduled: self.scheduled.clone(),
-            state_rx: self.state_rx.clone(),
-            state_tx: None,
-        }
-    }
+pub struct ZInitStatus {
+    pub pid: Pid,
+    // config is the service configuration
+    pub service: config::Service,
+    // target is the target state of the service (up, down)
+    pub target: Target,
+    pub scheduled: bool,
+    pub state: State,
 }
+
 impl ZInitService {
     fn new(service: config::Service, state: State) -> ZInitService {
         let (state_tx, state_rx) = watch::channel(state.clone());
@@ -79,7 +77,7 @@ impl ZInitService {
             target: Target::Up,
             scheduled: false,
             state_rx: state_rx,
-            state_tx: Some(state_tx),
+            state_tx: state_tx,
         }
     }
 
@@ -88,16 +86,20 @@ impl ZInitService {
             "setting state of service {} to {:?}",
             self.service.exec, state
         );
-        self.state = state.clone();
-        if let Some(tx) = &self.state_tx {
-            if let Err(e) = tx.send(state) {
-                warn!("couldn't send a notification on the state channel {}", e);
-            }
+        self.state = state;
+        if let Err(e) = self.state_tx.send(self.state.clone()) {
+            warn!("couldn't send a notification on the state channel {}", e);
         }
     }
 
-    pub fn get_state(&self) -> State {
-        self.state.clone()
+    pub fn status(&self) -> ZInitStatus {
+        ZInitStatus {
+            pid: self.pid,
+            state: self.state.clone(),
+            service: self.service.clone(),
+            target: self.target.clone(),
+            scheduled: self.scheduled.clone(),
+       }
     }
 }
 
@@ -199,7 +201,7 @@ impl ZInit {
         Ok(())
     }
 
-    pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<ZInitService> {
+    pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<ZInitStatus> {
         let table = self.services.read().await;
         let service = table.get(name.as_ref());
 
@@ -210,18 +212,18 @@ impl ZInit {
             }),
         };
 
-        let service = service.read().await.clone();
+        let service = service.read().await.status();
         Ok(service)
     }
-    async fn kill_wait(
-        &self,
+    async fn wait_kill(
         name: String,
         ch: mpsc::Sender<String>,
-        rx: &mut watch::Receiver<State>,
+        mut rx: watch::Receiver<State>,
+        shutdown_timeout: u64,
     ) -> Result<()> {
         debug!("kill_wait {}", name);
         let cp = name.clone();
-        let fut = timeout(std::time::Duration::from_secs(10), async move {
+        let fut = timeout(std::time::Duration::from_secs(shutdown_timeout), async move {
             while let Ok(_) = rx.changed().await {
                 let new_state = (*rx.borrow()).clone();
                 debug!(
@@ -233,13 +235,6 @@ impl ZInit {
                 }
             }
         });
-        // no guarantee that rx started listening?
-        // but this is how it's used in the docs
-        if let Err(e) = self.stop(name.clone()).await {
-            error!("couldn't shutdown service {}: {}", name.clone(), e);
-            ch.send(name).await?;
-            return Err(e);
-        }
         let _ = fut.await;
         debug!("sending to the death channel {}", name.clone());
         ch.send(name.clone()).await?;
@@ -247,13 +242,14 @@ impl ZInit {
     }
     async fn kill_process_tree(
         &self,
-        name: String,
-        dag: &mut ProcessDAG,
+        mut dag: ProcessDAG,
         mut state_channels: HashMap<String, watch::Receiver<State>>,
+        shutdown_timeouts: HashMap<String, u64>,
     ) -> Result<()> {
         let (tx, mut rx) = mpsc::channel(32);
-        tx.send(name).await?;
+        tx.send(DUMMY_ROOT.into()).await?;
         let mut futs = vec![];
+        let mut count = dag.adj.len();
         while let Some(name) = rx.recv().await {
             debug!("{} has been killed (or was inactive) adding its children", name);
             for child in dag.adj.get(&name).unwrap_or(&Vec::new()) {
@@ -267,15 +263,32 @@ impl ZInit {
                         tx.send(child.to_string()).await?;
                         continue;
                     }
-                    futs.push(self.kill_wait(
+                    let shutdown_timeout = shutdown_timeouts.get(child);
+                    let fut = tokio::spawn(Self::wait_kill(
                         child.to_string(),
                         tx.clone(),
-                        state_rx.unwrap(),
-                    ).await);
+                        state_rx.unwrap().clone(),
+                        *shutdown_timeout.unwrap_or(&DEFAULT_SHUTDOWN_TIMEOUT),
+                    ));
+                    futs.push(fut);
+
+                    // no guarantee that rx started listening?
+                    // but this is how it's used in the docs
+                    // not fatal though: the service will timeout
+                    // because the state change won't be reported
+                    // and the flow will continue. so the problem
+                    // is only unnecessary waiting
+                    if let Err(e) = self.stop(child.clone()).await {
+                        error!("couldn't shutdown service {}: {}", name.clone(), e);
+                    }
                 }
             }
+            count -= 1;
+            if count == 0 {
+                break
+            }
         }
-        // join_all(futs).await;
+        join_all(futs).await;
         Ok(())
     }
 
@@ -283,23 +296,30 @@ impl ZInit {
         info!("shutting down");
         *self.shutdown.write().await = true;
         loop {
-            let table = self.services.read().await;
-            let mut dag = service_dependency_order(&table).await;
             let mut state_channels: HashMap<String, watch::Receiver<State>> = HashMap::new();
+            let mut shutdown_timeouts: HashMap<String, u64> = HashMap::new();
+            let table = self.services.read().await;
             for (name, service) in table.iter() {
                 let service = service.read().await;
                 if service.state == State::Running || service.state == State::Spawned {
                     info!("service '{}' is scheduled for a shutdown", name);
                     state_channels.insert(name.into(), service.state_rx.clone());
+                    let mut timeout = service.service.shutdown_timeout;
+                    if timeout == 0 {
+                        timeout = DEFAULT_SHUTDOWN_TIMEOUT;
+                    }
+                    shutdown_timeouts.insert(name.into(), timeout);
                 }
             }
             drop(table);
-            if dag.adj.len() == 0 {
+            if state_channels.len() == 0 {
                 break;
             }
-            self.kill_process_tree(DUMMY_ROOT.into(), &mut dag, state_channels)
+            let dag = service_dependency_order(self.services.clone()).await;
+            self.kill_process_tree(dag, state_channels, shutdown_timeouts)
                 .await?;
             info!("waiting for services to shutdown");
+            // Q: not needed anymore?
             // sleep for a second before
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }

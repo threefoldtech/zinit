@@ -46,6 +46,7 @@ pub struct Service {
     pub test: String,
     #[serde(rename = "oneshot")]
     pub one_shot: bool,
+    pub shutdown_timeout: u64,
     pub after: Vec<String>,
     pub signal: Signal,
     pub log: Log,
