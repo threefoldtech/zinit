@@ -76,8 +76,8 @@ impl ZInitService {
             service,
             target: Target::Up,
             scheduled: false,
-            state_rx: state_rx,
-            state_tx: state_tx,
+            state_rx,
+            state_tx,
         }
     }
 
@@ -98,8 +98,8 @@ impl ZInitService {
             state: self.state.clone(),
             service: self.service.clone(),
             target: self.target.clone(),
-            scheduled: self.scheduled.clone(),
-       }
+            scheduled: self.scheduled,
+        }
     }
 }
 
@@ -223,18 +223,21 @@ impl ZInit {
     ) -> Result<()> {
         debug!("kill_wait {}", name);
         let cp = name.clone();
-        let fut = timeout(std::time::Duration::from_secs(shutdown_timeout), async move {
-            while let Ok(_) = rx.changed().await {
-                let new_state = (*rx.borrow()).clone();
-                debug!(
-                    "received a state change notification for service {} to {:?}",
-                    cp, new_state
-                );
-                if new_state != State::Running && new_state != State::Spawned {
-                    return;
+        let fut = timeout(
+            std::time::Duration::from_secs(shutdown_timeout),
+            async move {
+                while rx.changed().await.is_ok() {
+                    let new_state = (*rx.borrow()).clone();
+                    debug!(
+                        "received a state change notification for service {} to {:?}",
+                        cp, new_state
+                    );
+                    if new_state != State::Running && new_state != State::Spawned {
+                        return;
+                    }
                 }
-            }
-        });
+            },
+        );
         let _ = fut.await;
         debug!("sending to the death channel {}", name.clone());
         ch.send(name.clone()).await?;
@@ -251,14 +254,20 @@ impl ZInit {
         let mut futs = vec![];
         let mut count = dag.adj.len();
         while let Some(name) = rx.recv().await {
-            debug!("{} has been killed (or was inactive) adding its children", name);
+            debug!(
+                "{} has been killed (or was inactive) adding its children",
+                name
+            );
             for child in dag.adj.get(&name).unwrap_or(&Vec::new()) {
                 let child_indegree: &mut u32 = dag.indegree.entry(child.clone()).or_insert(0);
                 *child_indegree -= 1;
-                debug!("decrementing child {} indegree to {}", child, child_indegree);
+                debug!(
+                    "decrementing child {} indegree to {}",
+                    child, child_indegree
+                );
                 if *child_indegree == 0 {
                     let state_rx = state_channels.get_mut(child);
-                    if let None = state_rx {
+                    if state_rx.is_none() {
                         // not an active service
                         tx.send(child.to_string()).await?;
                         continue;
@@ -285,7 +294,7 @@ impl ZInit {
             }
             count -= 1;
             if count == 0 {
-                break
+                break;
             }
         }
         join_all(futs).await;
@@ -312,7 +321,7 @@ impl ZInit {
                 }
             }
             drop(table);
-            if state_channels.len() == 0 {
+            if state_channels.is_empty() {
                 break;
             }
             let dag = service_dependency_order(self.services.clone()).await;
