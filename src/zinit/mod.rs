@@ -3,8 +3,8 @@ pub mod ord;
 use crate::manager::{Log, Logs, Process, ProcessManager};
 use crate::zinit::ord::ProcessDAG;
 use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
+use tokio_stream::{StreamExt, wrappers::WatchStream};
 use anyhow::Result;
-use futures::future::join_all;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
@@ -51,10 +51,44 @@ pub struct ZInitService {
     // target is the target state of the service (up, down)
     pub target: Target,
     pub scheduled: bool,
-    pub state_rx: watch::Receiver<State>,
-    // if we need cloning, we can make it multiple consumer/ multiple producor?
-    state_tx: watch::Sender<State>,
-    state: State,
+    state: Watched<State>,
+}
+
+type Watcher<T> = watch::Receiver<Arc<T>>;
+
+struct Watched<T> {
+    v: Arc<T>,
+    tx: watch::Sender<Arc<T>>,
+    rx: Watcher<T>,
+}
+
+
+impl<T> Watched<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new(v: T) -> Self {
+        let v = Arc::new(v);
+        let (tx, rx) = watch::channel(Arc::clone(&v));
+        Self { v, tx, rx }
+    }
+
+    pub fn set(&mut self, v: T) {
+        let v = Arc::new(v);
+        self.v = Arc::clone(&v);
+        if self.tx.send(v).is_err() {
+            //nothing to do, we don't care if
+            //no watchers are watching. this should not block
+        }
+    }
+
+    pub fn get(&self) -> &T {
+        &self.v
+    }
+
+    pub fn watcher(&self) -> Watcher<T> {
+        self.rx.clone()
+    }
 }
 
 pub struct ZInitStatus {
@@ -69,33 +103,19 @@ pub struct ZInitStatus {
 
 impl ZInitService {
     fn new(service: config::Service, state: State) -> ZInitService {
-        let (state_tx, state_rx) = watch::channel(state.clone());
         ZInitService {
             pid: Pid::from_raw(0),
-            state,
+            state: Watched::new(state),
             service,
             target: Target::Up,
             scheduled: false,
-            state_rx,
-            state_tx,
-        }
-    }
-
-    pub fn set_state(&mut self, state: State) {
-        debug!(
-            "setting state of service {} to {:?}",
-            self.service.exec, state
-        );
-        self.state = state;
-        if let Err(e) = self.state_tx.send(self.state.clone()) {
-            warn!("couldn't send a notification on the state channel {}", e);
         }
     }
 
     pub fn status(&self) -> ZInitStatus {
         ZInitStatus {
             pid: self.pid,
-            state: self.state.clone(),
+            state: self.state.get().clone(),
             service: self.service.clone(),
             target: self.target.clone(),
             scheduled: self.scheduled,
@@ -217,22 +237,17 @@ impl ZInit {
     }
     async fn wait_kill(
         name: String,
-        ch: mpsc::Sender<String>,
-        mut rx: watch::Receiver<State>,
+        ch: mpsc::UnboundedSender<String>,
+        rx: Watcher<State>,
         shutdown_timeout: u64,
     ) -> Result<()> {
         debug!("kill_wait {}", name);
-        let cp = name.clone();
+        let mut rx = WatchStream::new(rx);
         let fut = timeout(
             std::time::Duration::from_secs(shutdown_timeout),
             async move {
-                while rx.changed().await.is_ok() {
-                    let new_state = rx.borrow();
-                    debug!(
-                        "received a state change notification for service {} to {:?}",
-                        cp, new_state
-                    );
-                    if *new_state != State::Running && *new_state != State::Spawned {
+                while let Some(state) = rx.next().await {
+                    if *state != State::Running && *state != State::Spawned {
                         return;
                     }
                 }
@@ -240,18 +255,17 @@ impl ZInit {
         );
         let _ = fut.await;
         debug!("sending to the death channel {}", name.clone());
-        ch.send(name.clone()).await?;
+        ch.send(name.clone())?;
         Ok(())
     }
     async fn kill_process_tree(
         &self,
         mut dag: ProcessDAG,
-        mut state_channels: HashMap<String, watch::Receiver<State>>,
+        mut state_channels: HashMap<String, Watcher<State>>,
         shutdown_timeouts: HashMap<String, u64>,
     ) -> Result<()> {
-        let (tx, mut rx) = mpsc::channel(32);
-        tx.send(DUMMY_ROOT.into()).await?;
-        let mut futs = vec![];
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(DUMMY_ROOT.into())?;
         let mut count = dag.adj.len();
         while let Some(name) = rx.recv().await {
             debug!(
@@ -259,27 +273,26 @@ impl ZInit {
                 name
             );
             for child in dag.adj.get(&name).unwrap_or(&Vec::new()) {
-                let child_indegree: &mut u32 = dag.indegree.entry(child.clone()).or_insert(0);
+                let child_indegree: &mut u32 = dag.indegree.entry(child.clone()).or_default();
                 *child_indegree -= 1;
                 debug!(
                     "decrementing child {} indegree to {}",
                     child, child_indegree
                 );
                 if *child_indegree == 0 {
-                    let state_rx = state_channels.get_mut(child);
-                    if state_rx.is_none() {
+                    let watcher = state_channels.get_mut(child);
+                    if watcher.is_none() {
                         // not an active service
-                        tx.send(child.to_string()).await?;
+                        tx.send(child.to_string())?;
                         continue;
                     }
                     let shutdown_timeout = shutdown_timeouts.get(child);
-                    let fut = tokio::spawn(Self::wait_kill(
+                    tokio::spawn(Self::wait_kill(
                         child.to_string(),
                         tx.clone(),
-                        state_rx.unwrap().clone(),
+                        watcher.unwrap().clone(),
                         *shutdown_timeout.unwrap_or(&DEFAULT_SHUTDOWN_TIMEOUT),
                     ));
-                    futs.push(fut);
 
                     // no guarantee that rx started listening?
                     // but this is how it's used in the docs
@@ -297,21 +310,20 @@ impl ZInit {
                 break;
             }
         }
-        join_all(futs).await;
         Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down");
         *self.shutdown.write().await = true;
-        let mut state_channels: HashMap<String, watch::Receiver<State>> = HashMap::new();
+        let mut state_channels: HashMap<String, Watcher<State>> = HashMap::new();
         let mut shutdown_timeouts: HashMap<String, u64> = HashMap::new();
         let table = self.services.read().await;
         for (name, service) in table.iter() {
             let service = service.read().await;
-            if service.state == State::Running || service.state == State::Spawned {
+            if *service.state.get() == State::Running || *service.state.get() == State::Spawned {
                 info!("service '{}' is scheduled for a shutdown", name);
-                state_channels.insert(name.into(), service.state_rx.clone());
+                state_channels.insert(name.into(), service.state.watcher());
                 let mut timeout = service.service.shutdown_timeout;
                 if timeout == 0 {
                     timeout = DEFAULT_SHUTDOWN_TIMEOUT;
@@ -434,9 +446,9 @@ impl ZInit {
                     let ps = ps.read().await;
                     debug!(
                         "- service {} is {:?} oneshot: {}",
-                        dep, ps.state, ps.service.one_shot
+                        dep, ps.state.get(), ps.service.one_shot
                     );
-                    match ps.state {
+                    match ps.state.get() {
                         State::Running if !ps.service.one_shot => true,
                         State::Success => true,
                         _ => false,
@@ -521,7 +533,7 @@ impl ZInit {
 
         let mut service = service.write().await;
         if let Some(state) = state {
-            service.set_state(state);
+            service.state.set(state);
         }
 
         if let Some(target) = target {
@@ -601,7 +613,7 @@ impl ZInit {
 
             let child = match child {
                 Ok(child) => {
-                    service.set_state(State::Spawned);
+                    service.state.set(State::Spawned);
                     service.pid = child.pid;
                     child
                 }
@@ -610,13 +622,13 @@ impl ZInit {
                     // this can be duo to a bad command or exe not found.
                     // set service to failure.
                     error!("service {} failed to start: {}", name, err);
-                    service.set_state(State::Failure);
+                    service.state.set(State::Failure);
                     break;
                 }
             };
 
             if config.one_shot {
-                service.set_state(State::Running);
+                service.state.set(State::Running);
             }
             // we don't lock the here here because this can take forever
             // to finish. so we allow other services to schedule
@@ -638,9 +650,9 @@ impl ZInit {
             match result {
                 Err(err) => {
                     error!("failed to read service '{}' status: {}", name, err);
-                    service.set_state(State::Unknown);
+                    service.state.set(State::Unknown);
                 }
-                Ok(status) => service.set_state(match status.success() {
+                Ok(status) => service.state.set(match status.success() {
                     true => State::Success,
                     false => State::Error(status),
                 }),

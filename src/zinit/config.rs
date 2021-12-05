@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::Path;
-
 pub type Services = HashMap<String, Service>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -35,7 +34,9 @@ impl Default for Log {
         Log::Ring
     }
 }
-
+fn shutdown_default_timeout_fn() -> u64 {
+    10
+}
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Service {
@@ -46,6 +47,7 @@ pub struct Service {
     pub test: String,
     #[serde(rename = "oneshot")]
     pub one_shot: bool,
+    #[serde(default = "shutdown_default_timeout_fn")]
     pub shutdown_timeout: u64,
     pub after: Vec<String>,
     pub signal: Signal,
