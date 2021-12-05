@@ -54,12 +54,12 @@ pub struct ZInitService {
     state: Watched<State>,
 }
 
-type Watcher<T> = watch::Receiver<Arc<T>>;
+type Watcher<T> = WatchStream<Arc<T>>;
 
 struct Watched<T> {
     v: Arc<T>,
     tx: watch::Sender<Arc<T>>,
-    rx: Watcher<T>,
+    rx: watch::Receiver<Arc<T>>,
 }
 
 
@@ -87,7 +87,7 @@ where
     }
 
     pub fn watcher(&self) -> Watcher<T> {
-        self.rx.clone()
+        WatchStream::new(self.rx.clone())
     }
 }
 
@@ -235,14 +235,14 @@ impl ZInit {
         let service = service.read().await.status();
         Ok(service)
     }
+    
     async fn wait_kill(
         name: String,
         ch: mpsc::UnboundedSender<String>,
-        rx: Watcher<State>,
+        mut rx: Watcher<State>,
         shutdown_timeout: u64,
     ) -> Result<()> {
         debug!("kill_wait {}", name);
-        let mut rx = WatchStream::new(rx);
         let fut = timeout(
             std::time::Duration::from_secs(shutdown_timeout),
             async move {
@@ -258,12 +258,14 @@ impl ZInit {
         ch.send(name.clone())?;
         Ok(())
     }
+
     async fn kill_process_tree(
         &self,
         mut dag: ProcessDAG,
         mut state_channels: HashMap<String, Watcher<State>>,
-        shutdown_timeouts: HashMap<String, u64>,
+        mut shutdown_timeouts: HashMap<String, u64>,
     ) -> Result<()> {
+        debug!("\n\n\n\n\n\nthis is a new version\n\n\n\n\n\n");
         let (tx, mut rx) = mpsc::unbounded_channel();
         tx.send(DUMMY_ROOT.into())?;
         let mut count = dag.adj.len();
@@ -280,26 +282,20 @@ impl ZInit {
                     child, child_indegree
                 );
                 if *child_indegree == 0 {
-                    let watcher = state_channels.get_mut(child);
+                    let watcher = state_channels.remove(child);
                     if watcher.is_none() {
                         // not an active service
                         tx.send(child.to_string())?;
                         continue;
                     }
-                    let shutdown_timeout = shutdown_timeouts.get(child);
+                    let shutdown_timeout = shutdown_timeouts.remove(child);
                     tokio::spawn(Self::wait_kill(
                         child.to_string(),
                         tx.clone(),
-                        watcher.unwrap().clone(),
-                        *shutdown_timeout.unwrap_or(&DEFAULT_SHUTDOWN_TIMEOUT),
+                        watcher.unwrap(),
+                        shutdown_timeout.unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT),
                     ));
 
-                    // no guarantee that rx started listening?
-                    // but this is how it's used in the docs
-                    // not fatal though: the service will timeout
-                    // because the state change won't be reported
-                    // and the flow will continue. so the problem
-                    // is only unnecessary waiting
                     if let Err(e) = self.stop(child.clone()).await {
                         error!("couldn't shutdown service {}: {}", name.clone(), e);
                     }
