@@ -317,11 +317,7 @@ impl ZInit {
             if *service.state.get() == State::Running || *service.state.get() == State::Spawned {
                 info!("service '{}' is scheduled for a shutdown", name);
                 state_channels.insert(name.into(), service.state.watcher());
-                let mut timeout = service.service.shutdown_timeout;
-                if timeout == 0 {
-                    timeout = DEFAULT_SHUTDOWN_TIMEOUT;
-                }
-                shutdown_timeouts.insert(name.into(), timeout);
+                shutdown_timeouts.insert(name.into(), service.service.shutdown_timeout);
             }
         }
         drop(table);
