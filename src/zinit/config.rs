@@ -1,3 +1,4 @@
+use crate::zinit::DEFAULT_SHUTDOWN_TIMEOUT;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_yaml as yaml;
@@ -35,7 +36,7 @@ impl Default for Log {
     }
 }
 fn shutdown_default_timeout_fn() -> u64 {
-    10
+    DEFAULT_SHUTDOWN_TIMEOUT
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]

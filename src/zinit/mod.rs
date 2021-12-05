@@ -59,7 +59,6 @@ type Watcher<T> = WatchStream<Arc<T>>;
 struct Watched<T> {
     v: Arc<T>,
     tx: watch::Sender<Arc<T>>,
-    rx: watch::Receiver<Arc<T>>,
 }
 
 impl<T> Watched<T>
@@ -68,8 +67,8 @@ where
 {
     pub fn new(v: T) -> Self {
         let v = Arc::new(v);
-        let (tx, rx) = watch::channel(Arc::clone(&v));
-        Self { v, tx, rx }
+        let (tx, _) = watch::channel(Arc::clone(&v));
+        Self { v, tx }
     }
 
     pub fn set(&mut self, v: T) {
@@ -86,7 +85,7 @@ where
     }
 
     pub fn watcher(&self) -> Watcher<T> {
-        WatchStream::new(self.rx.clone())
+        WatchStream::new(self.tx.subscribe())
     }
 }
 
