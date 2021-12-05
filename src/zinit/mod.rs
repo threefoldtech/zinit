@@ -3,7 +3,6 @@ pub mod ord;
 use crate::manager::{Log, Logs, Process, ProcessManager};
 use crate::zinit::ord::ProcessDAG;
 use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
-use tokio_stream::{StreamExt, wrappers::WatchStream};
 use anyhow::Result;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
@@ -17,6 +16,7 @@ use tokio::sync::watch;
 use tokio::sync::{Notify, RwLock};
 use tokio::time;
 use tokio::time::timeout;
+use tokio_stream::{wrappers::WatchStream, StreamExt};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 10; // in seconds
 
@@ -61,7 +61,6 @@ struct Watched<T> {
     tx: watch::Sender<Arc<T>>,
     rx: watch::Receiver<Arc<T>>,
 }
-
 
 impl<T> Watched<T>
 where
@@ -235,7 +234,7 @@ impl ZInit {
         let service = service.read().await.status();
         Ok(service)
     }
-    
+
     async fn wait_kill(
         name: String,
         ch: mpsc::UnboundedSender<String>,
@@ -265,7 +264,6 @@ impl ZInit {
         mut state_channels: HashMap<String, Watcher<State>>,
         mut shutdown_timeouts: HashMap<String, u64>,
     ) -> Result<()> {
-        debug!("\n\n\n\n\n\nthis is a new version\n\n\n\n\n\n");
         let (tx, mut rx) = mpsc::unbounded_channel();
         tx.send(DUMMY_ROOT.into())?;
         let mut count = dag.adj.len();
@@ -442,7 +440,9 @@ impl ZInit {
                     let ps = ps.read().await;
                     debug!(
                         "- service {} is {:?} oneshot: {}",
-                        dep, ps.state.get(), ps.service.one_shot
+                        dep,
+                        ps.state.get(),
+                        ps.service.one_shot
                     );
                     match ps.state.get() {
                         State::Running if !ps.service.one_shot => true,
