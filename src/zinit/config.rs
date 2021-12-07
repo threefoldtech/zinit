@@ -1,4 +1,3 @@
-use crate::zinit::DEFAULT_SHUTDOWN_TIMEOUT;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_yaml as yaml;
@@ -7,6 +6,8 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::Path;
 pub type Services = HashMap<String, Service>;
+
+pub const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 10; // in seconds
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]

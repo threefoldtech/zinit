@@ -6,6 +6,8 @@ pub const DUMMY_ROOT: &str = "";
 pub struct ProcessDAG {
     pub adj: HashMap<String, Vec<String>>,
     pub indegree: HashMap<String, u32>,
+    /// number of services including the dummy root
+    pub count: u32,
 }
 pub async fn service_dependency_order(services: Arc<RwLock<Table>>) -> ProcessDAG {
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
@@ -33,5 +35,6 @@ pub async fn service_dependency_order(services: Arc<RwLock<Table>>) -> ProcessDA
     ProcessDAG {
         adj: children,
         indegree,
+        count: table.len() as u32 + 1,
     }
 }

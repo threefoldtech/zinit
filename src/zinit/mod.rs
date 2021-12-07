@@ -4,6 +4,7 @@ use crate::manager::{Log, Logs, Process, ProcessManager};
 use crate::zinit::ord::ProcessDAG;
 use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
 use anyhow::Result;
+use config::DEFAULT_SHUTDOWN_TIMEOUT;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
@@ -17,8 +18,6 @@ use tokio::sync::{Notify, RwLock};
 use tokio::time;
 use tokio::time::timeout;
 use tokio_stream::{wrappers::WatchStream, StreamExt};
-
-const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 10; // in seconds
 
 pub trait WaitStatusExt {
     fn success(&self) -> bool;
@@ -74,10 +73,8 @@ where
     pub fn set(&mut self, v: T) {
         let v = Arc::new(v);
         self.v = Arc::clone(&v);
-        if self.tx.send(v).is_err() {
-            //nothing to do, we don't care if
-            //no watchers are watching. this should not block
-        }
+        // update the value even when there are no receivers
+        self.tx.send_replace(v);
     }
 
     pub fn get(&self) -> &T {
@@ -234,12 +231,13 @@ impl ZInit {
         Ok(service)
     }
 
-    async fn wait_kill(
+    async fn kill_wait(
+        zinit: Self,
         name: String,
         ch: mpsc::UnboundedSender<String>,
         mut rx: Watcher<State>,
         shutdown_timeout: u64,
-    ) -> Result<()> {
+    ) {
         debug!("kill_wait {}", name);
         let fut = timeout(
             std::time::Duration::from_secs(shutdown_timeout),
@@ -251,10 +249,20 @@ impl ZInit {
                 }
             },
         );
-        let _ = fut.await;
+        let stop_result = zinit.stop(name.clone()).await;
+        match stop_result {
+            Ok(_) => {
+                let _ = fut.await;
+            }
+            Err(e) => error!("couldn't stop service {}: {}", name.clone(), e),
+        }
         debug!("sending to the death channel {}", name.clone());
-        ch.send(name.clone())?;
-        Ok(())
+        if let Err(e) = ch.send(name.clone()) {
+            error!(
+                "error: couldn't send the service {} to the shutdown loop: {}",
+                name, e
+            );
+        }
     }
 
     async fn kill_process_tree(
@@ -265,7 +273,7 @@ impl ZInit {
     ) -> Result<()> {
         let (tx, mut rx) = mpsc::unbounded_channel();
         tx.send(DUMMY_ROOT.into())?;
-        let mut count = dag.adj.len();
+        let mut count = dag.count;
         while let Some(name) = rx.recv().await {
             debug!(
                 "{} has been killed (or was inactive) adding its children",
@@ -286,16 +294,13 @@ impl ZInit {
                         continue;
                     }
                     let shutdown_timeout = shutdown_timeouts.remove(child);
-                    tokio::spawn(Self::wait_kill(
+                    tokio::spawn(Self::kill_wait(
+                        self.clone(),
                         child.to_string(),
                         tx.clone(),
                         watcher.unwrap(),
                         shutdown_timeout.unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT),
                     ));
-
-                    if let Err(e) = self.stop(child.clone()).await {
-                        error!("couldn't shutdown service {}: {}", name.clone(), e);
-                    }
                 }
             }
             count -= 1;
