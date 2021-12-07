@@ -232,7 +232,7 @@ impl ZInit {
     }
 
     async fn kill_wait(
-        zinit: Self,
+        self,
         name: String,
         ch: mpsc::UnboundedSender<String>,
         mut rx: Watcher<State>,
@@ -249,7 +249,7 @@ impl ZInit {
                 }
             },
         );
-        let stop_result = zinit.stop(name.clone()).await;
+        let stop_result = self.stop(name.clone()).await;
         match stop_result {
             Ok(_) => {
                 let _ = fut.await;
