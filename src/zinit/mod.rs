@@ -1,7 +1,10 @@
 pub mod config;
-
+pub mod ord;
 use crate::manager::{Log, Logs, Process, ProcessManager};
+use crate::zinit::ord::ProcessDAG;
+use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
 use anyhow::Result;
+use config::DEFAULT_SHUTDOWN_TIMEOUT;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
@@ -9,8 +12,12 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::sync::{Notify, RwLock};
 use tokio::time;
+use tokio::time::timeout;
+use tokio_stream::{wrappers::WatchStream, StreamExt};
 
 pub trait WaitStatusExt {
     fn success(&self) -> bool;
@@ -36,25 +43,77 @@ pub enum ZInitError {
 }
 /// Process is a representation of a scheduled/running
 /// service
-#[derive(Clone)]
 pub struct ZInitService {
     pub pid: Pid,
-    pub state: State,
     // config is the service configuration
     pub service: config::Service,
     // target is the target state of the service (up, down)
     pub target: Target,
     pub scheduled: bool,
+    state: Watched<State>,
+}
+
+type Watcher<T> = WatchStream<Arc<T>>;
+
+struct Watched<T> {
+    v: Arc<T>,
+    tx: watch::Sender<Arc<T>>,
+}
+
+impl<T> Watched<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new(v: T) -> Self {
+        let v = Arc::new(v);
+        let (tx, _) = watch::channel(Arc::clone(&v));
+        Self { v, tx }
+    }
+
+    pub fn set(&mut self, v: T) {
+        let v = Arc::new(v);
+        self.v = Arc::clone(&v);
+        // update the value even when there are no receivers
+        self.tx.send_replace(v);
+    }
+
+    pub fn get(&self) -> &T {
+        &self.v
+    }
+
+    pub fn watcher(&self) -> Watcher<T> {
+        WatchStream::new(self.tx.subscribe())
+    }
+}
+
+pub struct ZInitStatus {
+    pub pid: Pid,
+    // config is the service configuration
+    pub service: config::Service,
+    // target is the target state of the service (up, down)
+    pub target: Target,
+    pub scheduled: bool,
+    pub state: State,
 }
 
 impl ZInitService {
     fn new(service: config::Service, state: State) -> ZInitService {
         ZInitService {
             pid: Pid::from_raw(0),
-            state,
+            state: Watched::new(state),
             service,
             target: Target::Up,
             scheduled: false,
+        }
+    }
+
+    pub fn status(&self) -> ZInitStatus {
+        ZInitStatus {
+            pid: self.pid,
+            state: self.state.get().clone(),
+            service: self.service.clone(),
+            target: self.target.clone(),
+            scheduled: self.scheduled,
         }
     }
 }
@@ -157,7 +216,7 @@ impl ZInit {
         Ok(())
     }
 
-    pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<ZInitService> {
+    pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<ZInitStatus> {
         let table = self.services.read().await;
         let service = table.get(name.as_ref());
 
@@ -168,39 +227,108 @@ impl ZInit {
             }),
         };
 
-        let service = service.read().await.clone();
+        let service = service.read().await.status();
         Ok(service)
+    }
+
+    async fn kill_wait(
+        self,
+        name: String,
+        ch: mpsc::UnboundedSender<String>,
+        mut rx: Watcher<State>,
+        shutdown_timeout: u64,
+    ) {
+        debug!("kill_wait {}", name);
+        let fut = timeout(
+            std::time::Duration::from_secs(shutdown_timeout),
+            async move {
+                while let Some(state) = rx.next().await {
+                    if *state != State::Running && *state != State::Spawned {
+                        return;
+                    }
+                }
+            },
+        );
+        let stop_result = self.stop(name.clone()).await;
+        match stop_result {
+            Ok(_) => {
+                let _ = fut.await;
+            }
+            Err(e) => error!("couldn't stop service {}: {}", name.clone(), e),
+        }
+        debug!("sending to the death channel {}", name.clone());
+        if let Err(e) = ch.send(name.clone()) {
+            error!(
+                "error: couldn't send the service {} to the shutdown loop: {}",
+                name, e
+            );
+        }
+    }
+
+    async fn kill_process_tree(
+        &self,
+        mut dag: ProcessDAG,
+        mut state_channels: HashMap<String, Watcher<State>>,
+        mut shutdown_timeouts: HashMap<String, u64>,
+    ) -> Result<()> {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(DUMMY_ROOT.into())?;
+        let mut count = dag.count;
+        while let Some(name) = rx.recv().await {
+            debug!(
+                "{} has been killed (or was inactive) adding its children",
+                name
+            );
+            for child in dag.adj.get(&name).unwrap_or(&Vec::new()) {
+                let child_indegree: &mut u32 = dag.indegree.entry(child.clone()).or_default();
+                *child_indegree -= 1;
+                debug!(
+                    "decrementing child {} indegree to {}",
+                    child, child_indegree
+                );
+                if *child_indegree == 0 {
+                    let watcher = state_channels.remove(child);
+                    if watcher.is_none() {
+                        // not an active service
+                        tx.send(child.to_string())?;
+                        continue;
+                    }
+                    let shutdown_timeout = shutdown_timeouts.remove(child);
+                    tokio::spawn(Self::kill_wait(
+                        self.clone(),
+                        child.to_string(),
+                        tx.clone(),
+                        watcher.unwrap(),
+                        shutdown_timeout.unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT),
+                    ));
+                }
+            }
+            count -= 1;
+            if count == 0 {
+                break;
+            }
+        }
+        Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down");
         *self.shutdown.write().await = true;
-        loop {
-            let table = self.services.read().await;
-            let mut to_kill: Vec<String> = Vec::new();
-            for (name, service) in table.iter() {
-                let service = service.read().await;
-                if service.state == State::Running || service.state == State::Spawned {
-                    info!("service '{}' is scheduled for a shutdown", name);
-                    to_kill.push(name.into());
-                }
+        let mut state_channels: HashMap<String, Watcher<State>> = HashMap::new();
+        let mut shutdown_timeouts: HashMap<String, u64> = HashMap::new();
+        let table = self.services.read().await;
+        for (name, service) in table.iter() {
+            let service = service.read().await;
+            if *service.state.get() == State::Running || *service.state.get() == State::Spawned {
+                info!("service '{}' is scheduled for a shutdown", name);
+                state_channels.insert(name.into(), service.state.watcher());
+                shutdown_timeouts.insert(name.into(), service.service.shutdown_timeout);
             }
-
-            drop(table);
-
-            if to_kill.is_empty() {
-                break;
-            }
-
-            for name in to_kill {
-                info!("stopping '{}'", name);
-                let _ = self.stop(&name).await;
-            }
-            info!("waiting for services to shutdown");
-            // sleep for a second before
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-
+        drop(table);
+        let dag = service_dependency_order(self.services.clone()).await;
+        self.kill_process_tree(dag, state_channels, shutdown_timeouts)
+            .await?;
         nix::unistd::sync();
         if self.container {
             std::process::exit(0);
@@ -312,9 +440,11 @@ impl ZInit {
                     let ps = ps.read().await;
                     debug!(
                         "- service {} is {:?} oneshot: {}",
-                        dep, ps.state, ps.service.one_shot
+                        dep,
+                        ps.state.get(),
+                        ps.service.one_shot
                     );
-                    match ps.state {
+                    match ps.state.get() {
                         State::Running if !ps.service.one_shot => true,
                         State::Success => true,
                         _ => false,
@@ -399,7 +529,7 @@ impl ZInit {
 
         let mut service = service.write().await;
         if let Some(state) = state {
-            service.state = state;
+            service.state.set(state);
         }
 
         if let Some(target) = target {
@@ -479,7 +609,7 @@ impl ZInit {
 
             let child = match child {
                 Ok(child) => {
-                    service.state = State::Spawned;
+                    service.state.set(State::Spawned);
                     service.pid = child.pid;
                     child
                 }
@@ -488,13 +618,13 @@ impl ZInit {
                     // this can be duo to a bad command or exe not found.
                     // set service to failure.
                     error!("service {} failed to start: {}", name, err);
-                    service.state = State::Failure;
+                    service.state.set(State::Failure);
                     break;
                 }
             };
 
             if config.one_shot {
-                service.state = State::Running;
+                service.state.set(State::Running);
             }
             // we don't lock the here here because this can take forever
             // to finish. so we allow other services to schedule
@@ -516,14 +646,12 @@ impl ZInit {
             match result {
                 Err(err) => {
                     error!("failed to read service '{}' status: {}", name, err);
-                    service.state = State::Unknown;
+                    service.state.set(State::Unknown);
                 }
-                Ok(status) => {
-                    service.state = match status.success() {
-                        true => State::Success,
-                        false => State::Error(status),
-                    }
-                }
+                Ok(status) => service.state.set(match status.success() {
+                    true => State::Success,
+                    false => State::Error(status),
+                }),
             };
 
             drop(service);
