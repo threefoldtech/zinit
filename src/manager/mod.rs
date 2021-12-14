@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use command_group::CommandGroup;
 use nix::sys::signal;
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd::Pid;
@@ -143,7 +144,7 @@ impl ProcessManager {
     }
 
     pub fn signal(&self, pid: Pid, sig: signal::Signal) -> Result<()> {
-        Ok(signal::kill(pid, sig)?)
+        Ok(signal::killpg(pid, sig)?)
     }
 
     pub async fn run(&self, cmd: Process, log: Log) -> Result<Child> {
@@ -168,7 +169,10 @@ impl ProcessManager {
             _ => child, // default to inherit
         };
 
-        let mut child = child.spawn().context("failed to spawn command")?;
+        let mut child = child
+            .group_spawn()
+            .context("failed to spawn command")?
+            .into_inner();
 
         if let Log::Ring(prefix) = log {
             if let Some(out) = child.stdout.take() {
