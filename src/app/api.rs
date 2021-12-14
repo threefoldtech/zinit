@@ -190,8 +190,11 @@ impl Api {
             after: {
                 let mut after = HashMap::new();
                 for service in status.service.after {
-                    let status = zinit.status(&service).await?;
-                    after.insert(service, format!("{:?}", status.state));
+                    let status = match zinit.status(&service).await {
+                        Ok(dep) => dep.state,
+                        Err(_) => crate::zinit::State::Unknown,
+                    };
+                    after.insert(service, format!("{:?}", status));
                 }
                 after
             },
