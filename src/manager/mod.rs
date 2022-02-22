@@ -169,6 +169,8 @@ impl ProcessManager {
             _ => child, // default to inherit
         };
 
+        let mut table = self.table.lock().await;
+
         let mut child = child
             .group_spawn()
             .context("failed to spawn command")?
@@ -190,7 +192,6 @@ impl ProcessManager {
 
         let id = child.id();
 
-        let mut table = self.table.lock().await;
         let pid = Pid::from_raw(id as i32);
         table.insert(pid, tx);
 
