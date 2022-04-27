@@ -142,7 +142,8 @@ impl Api {
     }
 
     async fn monitor<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))?;
+        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
+            .context("failed to load service config")?;
         zinit.monitor(name, service).await?;
         Ok(Value::Null)
     }
