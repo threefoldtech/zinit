@@ -102,21 +102,23 @@ impl ProcessManager {
 
     pub fn start(&self) {
         let table = Arc::clone(&self.table);
-        tokio::spawn(async move {
-            let mut signals = match unix::signal(unix::SignalKind::child()) {
-                Ok(s) => s,
-                Err(err) => {
-                    panic!("failed to bind to signals: {}", err);
-                }
-            };
+        let mut signals = match unix::signal(unix::SignalKind::child()) {
+            Ok(s) => s,
+            Err(err) => {
+                panic!("failed to bind to signals: {}", err);
+            }
+        };
 
+        tokio::spawn(async move {
             loop {
                 signals.recv().await;
                 let mut table = table.lock().await;
                 for exited in Self::wait_process() {
                     if let Some(pid) = exited.pid() {
                         if let Some(sender) = table.remove(&pid) {
-                            let _ = sender.send(exited);
+                            if sender.send(exited).is_err() {
+                                debug!("failed to send exit state to process: {}", pid);
+                            }
                         }
                     }
                 }
@@ -204,18 +206,13 @@ struct Environ(HashMap<String, String>);
 
 impl Environ {
     fn new() -> Environ {
-        let mut env = HashMap::new();
-        for p in &["/etc/environment"] {
-            let r = match Environ::parse(p) {
-                Ok(r) => r,
-                Err(_) => {
-                    //skip
-                    continue;
-                }
-            };
-
-            env.extend(r);
-        }
+        let env = match Environ::parse("/etc/environment") {
+            Ok(r) => r,
+            Err(err) => {
+                error!("failed to load /etc/environment file: {}", err);
+                HashMap::new()
+            }
+        };
 
         Environ(env)
     }

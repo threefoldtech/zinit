@@ -142,7 +142,8 @@ impl Api {
     }
 
     async fn monitor<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))?;
+        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
+            .context("failed to load service config")?;
         zinit.monitor(name, service).await?;
         Ok(Value::Null)
     }
@@ -222,8 +223,8 @@ impl Client {
     async fn command(&self, c: &str) -> Result<Value> {
         let mut con = BufStream::new(self.connect().await?);
 
-        con.write(c.as_bytes()).await?;
-        con.write(b"\n").await?;
+        let _ = con.write(c.as_bytes()).await?;
+        let _ = con.write(b"\n").await?;
         con.flush().await?;
 
         let mut data = String::new();

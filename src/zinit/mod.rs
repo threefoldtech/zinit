@@ -370,7 +370,7 @@ impl ZInit {
         if *self.shutdown.read().await {
             bail!(ZInitError::ShuttingDown);
         }
-        self.set(name.as_ref(), None, Some(Target::Up), None).await;
+        self.set(name.as_ref(), None, Some(Target::Up)).await;
         let table = self.services.read().await;
 
         let service = match table.get(name.as_ref()) {
@@ -472,7 +472,7 @@ impl ZInit {
             match result {
                 Ok(result) => {
                     if result {
-                        self.set(&name, Some(State::Running), None, None).await;
+                        self.set(&name, Some(State::Running), None).await;
                         // release
                         self.notify.notify_waiters();
                         return;
@@ -481,7 +481,7 @@ impl ZInit {
                     time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 Err(_) => {
-                    self.set(&name, Some(State::TestFailure), None, None).await;
+                    self.set(&name, Some(State::TestFailure), None).await;
                 }
             }
         }
@@ -514,13 +514,7 @@ impl ZInit {
         Ok(false)
     }
 
-    async fn set(
-        &self,
-        name: &str,
-        state: Option<State>,
-        target: Option<Target>,
-        scheduled: Option<bool>,
-    ) {
+    async fn set(&self, name: &str, state: Option<State>, target: Option<Target>) {
         let table = self.services.read().await;
         let service = match table.get(name) {
             Some(service) => service,
@@ -534,10 +528,6 @@ impl ZInit {
 
         if let Some(target) = target {
             service.target = target;
-        }
-
-        if let Some(scheduled) = scheduled {
-            service.scheduled = scheduled
         }
     }
 
@@ -562,6 +552,7 @@ impl ZInit {
             let name = name.clone();
 
             let service = input.read().await;
+            // early check if service is down, so we don't have to do extra checks
             if service.target == Target::Down {
                 // we check target in loop in case service have
                 // been set down.
@@ -583,7 +574,7 @@ impl ZInit {
                     break 'checks;
                 }
 
-                self.set(&name, Some(State::Blocked), None, None).await;
+                self.set(&name, Some(State::Blocked), None).await;
                 // don't even care if i am lagging
                 // as long i am notified that some services status
                 // has changed
@@ -597,6 +588,17 @@ impl ZInit {
                 config::Log::Ring => Log::Ring(name.clone()),
             };
 
+            let mut service = input.write().await;
+            // we check again in case target has changed. Since we had to release the lock
+            // earlier to not block locking on this service (for example if a stop was called)
+            // while the service was waiting for dependencies.
+            // the lock is kept until the spawning and the update of the pid.
+            if service.target == Target::Down {
+                // we check target in loop in case service have
+                // been set down.
+                break;
+            }
+
             let child = self
                 .pm
                 .run(
@@ -604,8 +606,6 @@ impl ZInit {
                     log.clone(),
                 )
                 .await;
-
-            let mut service = input.write().await;
 
             let child = match child {
                 Ok(child) => {
@@ -627,7 +627,8 @@ impl ZInit {
                 service.state.set(State::Running);
             }
             // we don't lock the here here because this can take forever
-            // to finish. so we allow other services to schedule
+            // to finish. so we allow other operation on the service (for example)
+            // status and stop operations.
             drop(service);
 
             let mut handler = None;
@@ -664,6 +665,7 @@ impl ZInit {
             time::sleep(std::time::Duration::from_secs(2)).await;
         }
 
-        self.set(&name, None, None, Some(false)).await;
+        let mut service = input.write().await;
+        service.scheduled = false;
     }
 }
