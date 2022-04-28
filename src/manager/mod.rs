@@ -166,7 +166,7 @@ impl ProcessManager {
         let child = child.args(&args[1..]).envs(&self.env.0).envs(cmd.env);
 
         let child = match log {
-            Log::None => child.stdin(Stdio::null()).stdout(Stdio::null()),
+            Log::None => child.stdout(Stdio::null()).stderr(Stdio::null()),
             Log::Ring(_) => child.stdout(Stdio::piped()).stderr(Stdio::piped()),
             _ => child, // default to inherit
         };
