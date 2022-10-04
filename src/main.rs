@@ -49,7 +49,11 @@ async fn main() -> Result<()> {
         )
         .subcommand(
             SubCommand::with_name("shutdown")
-                .about("stop all services and exit"),
+                .about("stop all services and power off"),
+        )
+        .subcommand(
+            SubCommand::with_name("reboot")
+                .about("stop all services and reboot"),
         )
         .subcommand(
             SubCommand::with_name("status")
@@ -146,6 +150,7 @@ async fn main() -> Result<()> {
         }
         ("list", _) => app::list(socket).await,
         ("shutdown", _) => app::shutdown(socket).await,
+        ("reboot", _) => app::reboot(socket).await,
         // ("log", Some(matches)) => app::log(matches.value_of("filter")),
         ("status", Some(matches)) => {
             app::status(socket, matches.value_of("service").unwrap()).await

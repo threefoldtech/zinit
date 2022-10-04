@@ -75,7 +75,7 @@ impl Api {
             },
         };
 
-        let value = match encoder::to_string(&response) {
+        let value = match encoder::to_vec(&response) {
             Ok(value) => value,
             Err(err) => {
                 debug!("failed to create response: {}", err);
@@ -83,7 +83,7 @@ impl Api {
             }
         };
 
-        if let Err(err) = stream.write_all(value.as_bytes()).await {
+        if let Err(err) = stream.write_all(&value).await {
             error!("failed to send response to client: {}", err);
         };
 
@@ -107,6 +107,7 @@ impl Api {
         match parts[0].as_ref() {
             "list" => Self::list(zinit).await,
             "shutdown" => Self::shutdown(zinit).await,
+            "reboot" => Self::reboot(zinit).await,
             "log" => Self::log(stream, zinit).await,
             "start" if parts.len() == 2 => Self::start(&parts[1], zinit).await,
             "stop" if parts.len() == 2 => Self::stop(&parts[1], zinit).await,
@@ -162,6 +163,16 @@ impl Api {
         tokio::spawn(async move {
             if let Err(err) = zinit.shutdown().await {
                 error!("failed to execute shutdown: {}", err);
+            }
+        });
+
+        Ok(Value::Null)
+    }
+
+    async fn reboot(zinit: ZInit) -> Result<Value> {
+        tokio::spawn(async move {
+            if let Err(err) = zinit.reboot().await {
+                error!("failed to execute reboot: {}", err);
             }
         });
 
@@ -282,6 +293,11 @@ impl Client {
 
     pub async fn shutdown(&self) -> Result<()> {
         self.command("shutdown").await?;
+        Ok(())
+    }
+
+    pub async fn reboot(&self) -> Result<()> {
+        self.command("reboot").await?;
         Ok(())
     }
 

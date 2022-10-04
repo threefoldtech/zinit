@@ -104,6 +104,12 @@ pub async fn shutdown(socket: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn reboot(socket: &str) -> Result<()> {
+    let client = api::Client::new(socket);
+    client.reboot().await?;
+    Ok(())
+}
+
 pub async fn status(socket: &str, name: &str) -> Result<()> {
     let client = api::Client::new(socket);
     let results = client.status(name).await?;
