@@ -5,6 +5,7 @@ use crate::zinit::ord::ProcessDAG;
 use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
 use anyhow::Result;
 use config::DEFAULT_SHUTDOWN_TIMEOUT;
+use nix::sys::reboot::RebootMode;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
@@ -313,6 +314,15 @@ impl ZInit {
 
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down");
+        self.power(RebootMode::RB_POWER_OFF).await
+    }
+
+    pub async fn reboot(&self) -> Result<()> {
+        info!("rebooting");
+        self.power(RebootMode::RB_AUTOBOOT).await
+    }
+
+    async fn power(&self, mode: RebootMode) -> Result<()> {
         *self.shutdown.write().await = true;
         let mut state_channels: HashMap<String, Watcher<State>> = HashMap::new();
         let mut shutdown_timeouts: HashMap<String, u64> = HashMap::new();
@@ -333,7 +343,7 @@ impl ZInit {
         if self.container {
             std::process::exit(0);
         } else {
-            nix::sys::reboot::reboot(nix::sys::reboot::RebootMode::RB_AUTOBOOT)?;
+            nix::sys::reboot::reboot(mode)?;
         }
         Ok(())
     }
