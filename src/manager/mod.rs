@@ -186,7 +186,7 @@ impl ProcessManager {
 
             if let Some(out) = child.stderr.take() {
                 let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
-                self.sink(out, format!("[+] {}", prefix))
+                self.sink(out, format!("[-] {}", prefix))
             }
         }
 
