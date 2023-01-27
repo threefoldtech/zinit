@@ -8,7 +8,7 @@ It reads the configured services files in available in the config directory`/etc
 
 When a service is monitored, it means that it's auto started, and then watched in case the service exited for any reason. When a service exits, it's automatically restarted, unless it's marked as a `oneshot`
 
-## Running zinit in a container
+### Running zinit in a container
 
 When running zinit in a container, supply the `--container` argument to the init command.
 
