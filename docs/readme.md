@@ -3,9 +3,14 @@
 Run `zinit --help` to show a list of the current implemented sub-commands.
 
 ## init
-the init sub-command is the main mode for zinit. it reads the configured services files available under the config directory provided by the `-c` flag. Then it auto monitor those services.
+the init sub-command is the main mode for zinit. 
+It reads the configured services files in available in the config directory`/etc/zinit` or anopther one provided by the`-c` flag. Then it auto monitors those services.
 
 When a service is monitored, it means that it's auto started, and then watched in case the service exited for any reason. When a service exits, it's automatically restarted, unless it's marked as a `oneshot`
+
+## Running zinit in a container
+
+When running zinit in a container, supply the `--container` argument to the init command.
 
 If you want to read more about `zinit` process manager please check [here](implementation.md)
 
