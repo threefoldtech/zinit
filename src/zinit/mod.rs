@@ -194,8 +194,8 @@ impl ZInit {
         let _ = self.shutdown().await;
     }
 
-    pub async fn logs(&self) -> Result<Logs> {
-        self.pm.stream().await
+    pub async fn logs(&self, follow: bool) -> Logs {
+        self.pm.stream(follow).await
     }
 
     pub async fn monitor<S: Into<String>>(&self, name: S, service: config::Service) -> Result<()> {
@@ -668,7 +668,7 @@ impl ZInit {
             drop(service);
             if config.one_shot {
                 // we don't need to restart the service anymore
-                let _ = self.notify.notify_waiters();
+                self.notify.notify_waiters();
                 break;
             }
             // we trying again in 2 seconds

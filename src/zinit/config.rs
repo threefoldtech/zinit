@@ -23,19 +23,15 @@ impl Default for Signal {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Default, Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Log {
     None,
+    #[default]
     Ring,
     Stdout,
 }
 
-impl Default for Log {
-    fn default() -> Self {
-        Log::Ring
-    }
-}
 fn default_shutdown_timeout_fn() -> u64 {
     DEFAULT_SHUTDOWN_TIMEOUT
 }

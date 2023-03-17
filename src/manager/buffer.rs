@@ -97,7 +97,12 @@ impl Ring {
         Ok(())
     }
 
-    pub async fn stream(&self) -> Result<Logs> {
+    /// stream returns a continues stream that first receive
+    /// a snapshot of the current buffer.
+    /// then if follow is true the logs stream will remain
+    /// open and fed each received line forever until the
+    /// received closed the channel from its end.
+    pub async fn stream(&self, follow: bool) -> Logs {
         let (tx, stream) = mpsc::channel::<Arc<String>>(100);
         let mut rx = self.sender.subscribe();
         let buffer = self
@@ -110,6 +115,10 @@ impl Ring {
         tokio::spawn(async move {
             for item in buffer {
                 let _ = tx.send(Arc::clone(&item)).await;
+            }
+
+            if !follow {
+                return;
             }
 
             loop {
@@ -128,6 +137,6 @@ impl Ring {
             }
         });
 
-        Ok(stream)
+        stream
     }
 }
