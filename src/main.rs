@@ -108,6 +108,13 @@ async fn main() -> Result<()> {
         .subcommand(
             SubCommand::with_name("log")
                 .arg(
+                    Arg::with_name("snapshot")
+                        .short("s")
+                        .long("snapshot")
+                        .required(false)
+                        .help("if set log prints current buffer without following")
+                    )
+                .arg(
                     Arg::with_name("filter")
                         .value_name("FILTER")
                         .required(false)
@@ -171,14 +178,21 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        ("log", Some(matches)) => app::logs(socket, matches.value_of("filter")).await,
+        ("log", Some(matches)) => {
+            app::logs(
+                socket,
+                matches.value_of("filter"),
+                !matches.is_present("snapshot"),
+            )
+            .await
+        }
         _ => app::list(socket).await, // default command
     };
 
     match result {
         Ok(_) => Ok(()),
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{:#}", e);
             std::process::exit(1);
         }
     }

@@ -146,7 +146,10 @@ pub async fn kill(socket: &str, name: &str, signal: &str) -> Result<()> {
     client.kill(name, signal).await?;
     Ok(())
 }
-pub async fn logs(socket: &str, filter: Option<&str>) -> Result<()> {
+pub async fn logs(socket: &str, filter: Option<&str>, follow: bool) -> Result<()> {
     let client = api::Client::new(socket);
-    client.logs(tokio::io::stdout(), filter).await
+    if let Some(filter) = filter {
+        client.status(filter).await?;
+    }
+    client.logs(tokio::io::stdout(), filter, follow).await
 }

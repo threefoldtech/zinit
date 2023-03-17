@@ -65,7 +65,10 @@ impl Api {
         };
 
         let response = match Self::process(cmd, &mut stream, zinit).await {
-            Ok(body) => Response {
+            // When process returns None means we can terminate without
+            // writing any result to the socket.
+            Ok(None) => return,
+            Ok(Some(body)) => Response {
                 body,
                 state: State::Ok,
             },
@@ -94,7 +97,7 @@ impl Api {
         cmd: String,
         stream: &mut BufStream<UnixStream>,
         zinit: ZInit,
-    ) -> Result<Value> {
+    ) -> Result<Option<Value>> {
         let parts = match shlex::split(&cmd) {
             Some(parts) => parts,
             None => bail!("invalid command syntax"),
@@ -104,11 +107,20 @@ impl Api {
             bail!("unknown command");
         }
 
-        match parts[0].as_ref() {
+        if &parts[0] == "log" {
+            match parts.len() {
+                1 => Self::log(stream, zinit, true).await,
+                2 if parts[1] == "snapshot" => Self::log(stream, zinit, false).await,
+                _ => bail!("invalid log command arguments"),
+            }?;
+
+            return Ok(None);
+        }
+
+        let value = match parts[0].as_ref() {
             "list" => Self::list(zinit).await,
             "shutdown" => Self::shutdown(zinit).await,
             "reboot" => Self::reboot(zinit).await,
-            "log" => Self::log(stream, zinit).await,
             "start" if parts.len() == 2 => Self::start(&parts[1], zinit).await,
             "stop" if parts.len() == 2 => Self::stop(&parts[1], zinit).await,
             "kill" if parts.len() == 3 => Self::kill(&parts[1], &parts[2], zinit).await,
@@ -116,11 +128,13 @@ impl Api {
             "forget" if parts.len() == 2 => Self::forget(&parts[1], zinit).await,
             "monitor" if parts.len() == 2 => Self::monitor(&parts[1], zinit).await,
             _ => bail!("unknown command '{}' or wrong arguments count", parts[0]),
-        }
+        }?;
+
+        Ok(Some(value))
     }
 
-    async fn log(stream: &mut BufStream<UnixStream>, zinit: ZInit) -> Result<Value> {
-        let mut logs = zinit.logs().await?;
+    async fn log(stream: &mut BufStream<UnixStream>, zinit: ZInit, follow: bool) -> Result<Value> {
+        let mut logs = zinit.logs(follow).await;
 
         while let Some(line) = logs.recv().await {
             stream.write_all(line.as_bytes()).await?;
@@ -256,9 +270,18 @@ impl Client {
         &self,
         mut out: O,
         filter: Option<S>,
+        follow: bool,
     ) -> Result<()> {
         let mut con = self.connect().await?;
-        con.write_all(b"log\n").await?;
+        if follow {
+            // default behavior of log with no extra arguments
+            // is to stream all logs
+            con.write_all(b"log\n").await?;
+        } else {
+            // adding a snapshot subcmd will make it auto terminate
+            // immediate after
+            con.write_all(b"log snapshot\n").await?;
+        }
         con.flush().await?;
         match filter {
             None => tokio::io::copy(&mut con, &mut out).await?,
