@@ -217,12 +217,20 @@ impl Environ {
         Environ(env)
     }
 
-    fn parse<P>(p: P) -> Result<HashMap<String, String>>
+    fn parse<P>(p: P) -> Result<HashMap<String, String>, std::io::Error>
     where
         P: AsRef<std::path::Path>,
     {
         let mut m = HashMap::new();
-        let txt = std::fs::read_to_string(p)?;
+        let txt = match std::fs::read_to_string(p) {
+            Ok(txt) => txt,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                info!("skipping /etc/environment file because it does not exist");
+                "".into()
+            }
+            Err(err) => return Err(err),
+        };
+
         for line in txt.lines() {
             let line = line.trim();
             if line.starts_with('#') {
