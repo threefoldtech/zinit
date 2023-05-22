@@ -242,7 +242,12 @@ impl Client {
     }
 
     async fn connect(&self) -> Result<UnixStream> {
-        Ok(UnixStream::connect(&self.socket).await?)
+        UnixStream::connect(&self.socket).await.with_context(|| {
+            format!(
+                "failed to connect to '{:?}'. is zinit listening on that socket?",
+                self.socket
+            )
+        })
     }
 
     async fn command(&self, c: &str) -> Result<Value> {
