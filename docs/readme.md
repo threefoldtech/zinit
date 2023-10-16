@@ -1,9 +1,11 @@
 # Command line interface
+
 `zinit` provides sub commands to run as init process, and ctrl commands to start, stop, and query running services.
 Run `zinit --help` to show a list of the current implemented sub-commands.
 
 ## init
-the init sub-command is the main mode for zinit. 
+
+the init sub-command is the main mode for zinit.
 It reads the configured services files in available in the config directory`/etc/zinit` or anopther one provided by the`-c` flag. Then it auto monitors those services.
 
 When a service is monitored, it means that it's auto started, and then watched in case the service exited for any reason. When a service exits, it's automatically restarted, unless it's marked as a `oneshot`
@@ -14,15 +16,15 @@ If you want to read more about `zinit` process manager please check [here](imple
 
 When running zinit in a container, supply the `--container` argument to the init command.
 
-
 ### Service configuration
+
 ```yaml
 exec: "command line to start service"
 test: "command line to test service is running" # optional
 oneshot: true or false (false by default)
 after: # list of services that we depend on (optional)
-   - service1_name
-   - service2_name
+  - service1_name
+  - service2_name
 signal: # optional section
   stop: SIGKILL # the signal sent on `stop` action. default to SIGTERM
 log: null | ring | stdout
@@ -44,18 +46,22 @@ env:
 - env (dict) is an extra set of env variables (KEY, VALUE) paris that would be available on a service
 
 > Note: to use `ring` inside docker make sure you add the `kmsg` device to the list of allowed devices
+
 ```
 docker run -dt --device=/dev/kmsg:/dev/kmsg:wm zinit
 ```
 
 #### Examples
+
 redis-init.yaml
+
 ```yaml
 exec: sh -c "echo 'prepare db files for redis!'"
 oneshot: true
 ```
 
 redis.yaml
+
 ```yaml
 exec: redis-server --port 7777
 test: redis-cli -p 7777 PING
@@ -64,6 +70,7 @@ after:
 ```
 
 redis-after.yaml
+
 ```yaml
 exec: sh -c "populate redis with seed data"
 oneshot: true
@@ -72,6 +79,7 @@ after:
 ```
 
 ## Controlling commands
+
 ```bash
 zinit --help
 ```
@@ -99,6 +107,7 @@ SUBCOMMANDS:
     start      start service. has no effect if the service is already running
     status     show detailed service status
     stop       stop service
+    restart    restart a running service
 
 ```
 
@@ -107,13 +116,16 @@ As already described above, once zinit starts in init mode, it auto monitor all 
 - `kill`: Similar to the unix `kill` command, it sends a signal to a named service (default to `sigterm`). If the signal terminates the service, `zinit` will auto start it since the service target state is still `up`
 - `stop`: Stop sets the target state of the service to `down`, and send the `stop` signal. The stop signal is defaulted to `sigterm` but can be overwritten in the service configuration file. A `stop` action doesn't wait for the service to exit nor grantee that it's killed. It grantees that once the service is down, it won't re-spawn. A caller to the `stop` action can poll on the service state until it's down, or decide to send another signal (for example `kill <service> SIGKILL`) to fully stop it.
 - `start`: start is the opposite of `stop`. it will set the target state to `up` and will re-spawn the service if it's not already running.
+- `start`: restart restarting the service. it will first try to stop and put the service status to `Down` and start it again, if it failed to stop it, it will kill the service and then start it again.
 - `status`: shows detailed status of a named service.
 - `forget`: works only on a `stopped` service (means that the target state is set to `down` by a previous call to `stop`). Also no process must be associated with the service (if the `stop` call didn't do it, a `kill` might)
 - `list`: show a quick view of all monitored services.
 - `log`: show services logs from the zinit ring buffer. The buffer size is configured in `init`
 - `monitor`: monitor will load config of a service `name` from the configuration directory. and monitor it, this will allow you to add new
-service to the configuration directory in runtime.
+  service to the configuration directory in runtime.
 
 ## Config Files
+
 zinit does not require any other config files other that the service unit files. But zinit respects some of the global unix standard files:
+
 - `/etc/environment` . The file is read one time during boot, changes to this file in runtime has no effect (even for new services)
