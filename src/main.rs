@@ -139,6 +139,16 @@ async fn main() -> Result<()> {
                 )
                 .about("send a signal to a running service."),
         )
+        .subcommand(
+            SubCommand::with_name("restart")
+                .arg(
+                    Arg::with_name("service")
+                        .value_name("SERVICE")
+                        .required(true)
+                        .help("service name"),
+                )
+                .about("restart service."),
+        )
         .get_matches();
 
     let socket = matches.value_of("socket").unwrap();
@@ -185,6 +195,9 @@ async fn main() -> Result<()> {
                 !matches.is_present("snapshot"),
             )
             .await
+        }
+        ("restart", Some(matches)) => {
+            app::restart(socket, matches.value_of("service").unwrap()).await
         }
         _ => app::list(socket).await, // default command
     };

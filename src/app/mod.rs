@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde_yaml as encoder;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::time;
 
 fn logger(level: log::LevelFilter) -> Result<()> {
     let logger = fern::Dispatch::new()
@@ -126,6 +127,26 @@ pub async fn start(socket: &str, name: &str) -> Result<()> {
 pub async fn stop(socket: &str, name: &str) -> Result<()> {
     let client = api::Client::new(socket);
     client.stop(name).await?;
+    Ok(())
+}
+
+pub async fn restart(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
+    client.stop(name).await?;
+    //pull status
+    let mut count = 0;
+    while count <= 20 {
+        let result = client.status(name).await?;
+        if result.state == "Success" && result.target == "Down" {
+            client.start(name).await?;
+            return Ok(());
+        }
+        time::sleep(std::time::Duration::from_secs(2)).await;
+        count += 1;
+    }
+    // process not stopped try to kill it
+    client.kill(name, "SIGKILL").await?;
+    client.start(name).await?;
     Ok(())
 }
 
