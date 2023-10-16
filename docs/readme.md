@@ -90,24 +90,30 @@ ThreeFold Tech, https://github.com/threefoldtech
 A runit replacement
 
 USAGE:
-    zinit [SUBCOMMAND]
+    zinit [FLAGS] [OPTIONS] [SUBCOMMAND]
 
 FLAGS:
+    -d, --debug      run in debug mode
     -h, --help       Prints help information
     -V, --version    Prints version information
 
+OPTIONS:
+    -s, --socket <SOCKET>    path to unix socket [default: /var/run/zinit.sock]
+
 SUBCOMMANDS:
-    forget     forget a service. you can only forget a stopped service
-    help       Prints this message or the help of the given subcommand(s)
-    init       run in init mode, start and maintain configured services
-    kill       send a signal to a running service.
-    list       quick view of current known services and their status
-    log        view services logs from zinit ring buffer
-    monitor    start monitoring a service. configuration is loaded from server config directory
-    start      start service. has no effect if the service is already running
-    status     show detailed service status
-    stop       stop service
-    restart    restart a running service
+    forget      forget a service. you can only forget a stopped service
+    help        Prints this message or the help of the given subcommand(s)
+    init        run in init mode, start and maintain configured services
+    kill        send a signal to a running service.
+    list        quick view of current known services and their status
+    log         view services logs from zinit ring buffer
+    monitor     start monitoring a service. configuration is loaded from server config directory
+    reboot      stop all services and reboot
+    restart     restart service.
+    shutdown    stop all services and power off
+    start       start service. has no effect if the service is already running
+    status      show detailed service status
+    stop        stop service
 
 ```
 
@@ -116,7 +122,7 @@ As already described above, once zinit starts in init mode, it auto monitor all 
 - `kill`: Similar to the unix `kill` command, it sends a signal to a named service (default to `sigterm`). If the signal terminates the service, `zinit` will auto start it since the service target state is still `up`
 - `stop`: Stop sets the target state of the service to `down`, and send the `stop` signal. The stop signal is defaulted to `sigterm` but can be overwritten in the service configuration file. A `stop` action doesn't wait for the service to exit nor grantee that it's killed. It grantees that once the service is down, it won't re-spawn. A caller to the `stop` action can poll on the service state until it's down, or decide to send another signal (for example `kill <service> SIGKILL`) to fully stop it.
 - `start`: start is the opposite of `stop`. it will set the target state to `up` and will re-spawn the service if it's not already running.
-- `start`: restart restarting the service. it will first try to stop and put the service status to `Down` and start it again, if it failed to stop it, it will kill the service and then start it again.
+- `restart`: restart restarting the service. it will first try to stop and put the service status to `Down` and start it again, if it failed to stop it, it will kill the service and then start it again.
 - `status`: shows detailed status of a named service.
 - `forget`: works only on a `stopped` service (means that the target state is set to `down` by a previous call to `stop`). Also no process must be associated with the service (if the `stop` call didn't do it, a `kill` might)
 - `list`: show a quick view of all monitored services.

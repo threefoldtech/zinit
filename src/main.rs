@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
                         .required(true)
                         .help("service name"),
                 )
-                .about("restart service."),
+                .about("restart a service."),
         )
         .get_matches();
 
