@@ -134,15 +134,13 @@ pub async fn restart(socket: &str, name: &str) -> Result<()> {
     let client = api::Client::new(socket);
     client.stop(name).await?;
     //pull status
-    let mut count = 0;
-    while count <= 20 {
+    for _ in 0..20 {
         let result = client.status(name).await?;
-        if result.state == "Success" && result.target == "Down" {
+        if result.pid == 0 && result.target == "Down" {
             client.start(name).await?;
             return Ok(());
         }
-        time::sleep(std::time::Duration::from_secs(2)).await;
-        count += 1;
+        time::sleep(std::time::Duration::from_secs(1)).await;
     }
     // process not stopped try to kill it
     client.kill(name, "SIGKILL").await?;
