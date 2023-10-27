@@ -135,3 +135,7 @@ As already described above, once zinit starts in init mode, it auto monitor all 
 zinit does not require any other config files other that the service unit files. But zinit respects some of the global unix standard files:
 
 - `/etc/environment` . The file is read one time during boot, changes to this file in runtime has no effect (even for new services)
+
+## Line protocol
+
+Please check [protocol](protocol.md) docs
