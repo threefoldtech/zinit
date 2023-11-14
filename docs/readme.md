@@ -117,6 +117,18 @@ SUBCOMMANDS:
 
 ```
 
+## Notes on the usage of zinit
+
+zinit when it starts, it automatically `monitor` all services that are configured under it's configuration directory. This only happen on starting the `zinit init`. Adding new configuration files in the config dir **does not** make it auto started.
+
+New services must be `monitored` explicitly by calling the `zinit monitor <service-name>` command. Zinit will then try to load `<service-name>.yaml`. Monitor will then auto start the service.
+
+Once a service is started, you can then control it with `stop`, `kill`, `restart`, or check it's status with `status` just using the service name. Changes to the config file of that service does not affect the service. Since the config file is only loaded during a monitor.
+
+If you fully require to reload a config file, then the service must be `forgotten` first. This can be done by calling `zinit forget <service-name>` which is basically the opposite of monitor. Unlike monitor, forget require that the service has already been stopped by the `stop` call.
+
+## Control commands
+
 As already described above, once zinit starts in init mode, it auto monitor all services configured under the provided configuration directory. Once a service is 'monitored' you can control it with one of the following commands.
 
 - `kill`: Similar to the unix `kill` command, it sends a signal to a named service (default to `sigterm`). If the signal terminates the service, `zinit` will auto start it since the service target state is still `up`
