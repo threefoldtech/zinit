@@ -179,6 +179,11 @@ impl ProcessManager {
             .into_inner();
 
         if let Log::Ring(prefix) = log {
+            let _ = self
+                .ring
+                .push(format!("[-] {}: ------------ [start] ------------", prefix))
+                .await;
+
             if let Some(out) = child.stdout.take() {
                 let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
                 self.sink(out, format!("[+] {}", prefix))
