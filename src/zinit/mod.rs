@@ -4,6 +4,7 @@ use crate::manager::{Log, Logs, Process, ProcessManager};
 use crate::zinit::ord::ProcessDAG;
 use crate::zinit::ord::{service_dependency_order, DUMMY_ROOT};
 use anyhow::Result;
+use async_recursion::async_recursion;
 use config::DEFAULT_SHUTDOWN_TIMEOUT;
 use nix::sys::reboot::RebootMode;
 use nix::sys::signal;
@@ -87,7 +88,12 @@ where
     }
 }
 
-pub struct ZInitStatus {
+pub enum ZInitStatus {
+    Service(ServiceStatus),
+    Group(GroupStatus),
+}
+
+pub struct ServiceStatus {
     pub pid: Pid,
     // config is the service configuration
     pub service: config::Service,
@@ -95,6 +101,12 @@ pub struct ZInitStatus {
     pub target: Target,
     pub scheduled: bool,
     pub state: State,
+}
+
+pub struct GroupStatus {
+    pub name: String,
+    pub services: Vec<(String, ServiceStatus)>,
+    // maybe add target and state based on services of the group?
 }
 
 impl ZInitService {
@@ -108,8 +120,8 @@ impl ZInitService {
         }
     }
 
-    pub fn status(&self) -> ZInitStatus {
-        ZInitStatus {
+    pub fn status(&self) -> ServiceStatus {
+        ServiceStatus {
             pid: self.pid,
             state: self.state.get().clone(),
             service: self.service.clone(),
@@ -198,17 +210,37 @@ impl ZInit {
         self.pm.stream(follow).await
     }
 
-    pub async fn monitor<S: Into<String>>(&self, name: S, service: config::Service) -> Result<()> {
+    pub async fn monitor<S: Into<String>>(&self, name: S, mut entry: config::Entry) -> Result<()> {
         if *self.shutdown.read().await {
             bail!(ZInitError::ShuttingDown);
         }
         let name = name.into();
-        let mut services = self.services.write().await;
+        let services = self.services.read().await;
 
         if services.contains_key(&name) {
             bail!(ZInitError::ServiceAlreadyMonitored { name })
         }
+        if let config::Entry::Directory(ref mut svcs) = entry {
+            svcs.retain(|k, _| !services.contains_key(k));
+            // if nothing new to monitor in a group return an error
+            if svcs.is_empty() {
+                bail!(ZInitError::ServiceAlreadyMonitored { name })
+            }
+        }
+        drop(services);
+        match entry {
+            config::Entry::Service(service) => self.monitor_service(name, service).await,
+            config::Entry::Directory(services) => self.monitor_dir(services).await,
+        }
+    }
 
+    async fn monitor_service<S: Into<String>>(
+        &self,
+        name: S,
+        service: config::Service,
+    ) -> Result<()> {
+        let name = name.into();
+        let mut services = self.services.write().await;
         let service = Arc::new(RwLock::new(ZInitService::new(service, State::Unknown)));
         services.insert(name.clone(), Arc::clone(&service));
         let m = self.clone();
@@ -217,19 +249,45 @@ impl ZInit {
         Ok(())
     }
 
+    #[async_recursion]
+    async fn monitor_dir(&self, services: config::Services) -> Result<()> {
+        for (name, service) in services {
+            match service {
+                config::Entry::Service(service) => {
+                    self.monitor_service(name, service).await?;
+                }
+                config::Entry::Directory(services) => {
+                    self.monitor_dir(services).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<ZInitStatus> {
         let table = self.services.read().await;
         let service = table.get(name.as_ref());
+        if let Some(service) = service {
+            return Ok(ZInitStatus::Service(service.read().await.status()));
+        }
+        drop(table);
 
-        let service = match service {
-            Some(service) => service,
-            None => bail!(ZInitError::UnknownService {
+        let services = services_with_prefix(name.as_ref(), self.services.clone()).await;
+        if services.is_empty() {
+            bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
-            }),
+            })
+        }
+        let mut status = GroupStatus {
+            name: name.as_ref().to_string(),
+            services: vec![],
         };
 
-        let service = service.read().await.status();
-        Ok(service)
+        for (name, service) in services {
+            status.services.push((name, service.read().await.status()));
+        }
+
+        Ok(ZInitStatus::Group(status))
     }
 
     async fn kill_wait(
@@ -349,90 +407,95 @@ impl ZInit {
     }
 
     pub async fn stop<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let table = self.services.read().await;
-        let service = table.get(name.as_ref());
-
-        let service = match service {
-            Some(service) => service,
-            None => bail!(ZInitError::UnknownService {
+        let services = services_with_prefix(name.as_ref(), self.services.clone()).await;
+        if services.is_empty() {
+            bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
-            }),
-        };
-        let mut service = service.write().await;
-        service.target = Target::Down;
-        let signal = match signal::Signal::from_str(&service.service.signal.stop.to_uppercase()) {
-            Ok(signal) => signal,
-            Err(err) => bail!(
-                "unknown stop signal configured '{}': {}",
-                service.service.signal.stop,
-                err
-            ),
-        };
-
-        if service.pid.as_raw() == 0 {
-            return Ok(());
+            })
+        }
+        for (_, service) in services {
+            let mut service = service.write().await;
+            service.target = Target::Down;
+            let signal = match signal::Signal::from_str(&service.service.signal.stop.to_uppercase())
+            {
+                Ok(signal) => signal,
+                Err(err) => bail!(
+                    "unknown stop signal configured '{}': {}",
+                    service.service.signal.stop,
+                    err
+                ),
+            };
+            if service.pid.as_raw() == 0 {
+                continue;
+            }
+            self.pm.signal(service.pid, signal)?;
         }
 
-        self.pm.signal(service.pid, signal)
+        Ok(())
     }
 
     pub async fn start<S: AsRef<str>>(&self, name: S) -> Result<()> {
         if *self.shutdown.read().await {
             bail!(ZInitError::ShuttingDown);
         }
-        self.set(name.as_ref(), None, Some(Target::Up)).await;
-        let table = self.services.read().await;
-
-        let service = match table.get(name.as_ref()) {
-            Some(service) => service,
-            None => bail!(ZInitError::UnknownService {
+        let services = services_with_prefix(name.as_ref(), self.services.clone()).await;
+        if services.is_empty() {
+            bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
-            }),
-        };
+            })
+        }
+        for (name, service) in services {
+            self.set(name.as_ref(), None, Some(Target::Up)).await;
 
-        let m = self.clone();
-        tokio::spawn(m.watch(name.as_ref().into(), Arc::clone(service)));
+            let m = self.clone();
+            tokio::spawn(m.watch(name, service));
+        }
         Ok(())
     }
 
     pub async fn forget<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let mut table = self.services.write().await;
-        let service = match table.get(name.as_ref()) {
-            Some(service) => service,
-            None => bail!(ZInitError::UnknownService {
-                name: name.as_ref().into()
-            }),
-        };
-
-        let service = service.read().await;
-        if service.target == Target::Up || service.pid != Pid::from_raw(0) {
-            bail!(ZInitError::ServiceISUp {
+        let services = services_with_prefix(name.as_ref(), self.services.clone()).await;
+        if services.is_empty() {
+            bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
             })
         }
+        let mut table = self.services.write().await;
+        for (name, service) in services {
+            let service = service.read().await;
+            if service.target == Target::Up || service.pid != Pid::from_raw(0) {
+                bail!(ZInitError::ServiceISUp { name })
+            }
 
-        drop(service);
-        table.remove(name.as_ref());
+            drop(service);
+            table.remove(&name);
+        }
+
         Ok(())
     }
 
     pub async fn kill<S: AsRef<str>>(&self, name: S, signal: signal::Signal) -> Result<()> {
-        let table = self.services.read().await;
-        let service = match table.get(name.as_ref()) {
-            Some(service) => service,
-            None => bail!(ZInitError::UnknownService {
+        let services = services_with_prefix(name.as_ref(), self.services.clone()).await;
+        if services.is_empty() {
+            bail!(ZInitError::UnknownService {
                 name: name.as_ref().into()
-            }),
-        };
-
-        let service = service.read().await;
-        if service.pid == Pid::from_raw(0) {
+            })
+        }
+        let mut all_down = true;
+        for (_, service) in services {
+            let service = service.read().await;
+            if service.pid == Pid::from_raw(0) {
+                continue;
+            }
+            all_down = false;
+            self.pm.signal(service.pid, signal)?;
+        }
+        if all_down {
             bail!(ZInitError::ServiceISDown {
                 name: name.as_ref().into(),
             })
         }
-
-        self.pm.signal(service.pid, signal)
+        Ok(())
     }
 
     pub async fn list(&self) -> Result<Vec<String>> {
@@ -678,4 +741,23 @@ impl ZInit {
         let mut service = input.write().await;
         service.scheduled = false;
     }
+}
+
+async fn services_with_prefix<S: AsRef<str>>(
+    prefix: S,
+    services: Arc<RwLock<Table>>,
+) -> HashMap<String, Arc<RwLock<ZInitService>>> {
+    let mut v = HashMap::new();
+    let table = services.read().await;
+    if let Some(service) = table.get(prefix.as_ref()) {
+        v.insert(prefix.as_ref().to_string(), service.clone());
+        return v;
+    }
+    let prefix = format!("{}/", prefix.as_ref());
+    for (name, service) in table.iter() {
+        if name.starts_with(&prefix) {
+            v.insert(name.clone(), service.clone());
+        }
+    }
+    v
 }
