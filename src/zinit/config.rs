@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::Path;
-pub type Services = HashMap<String, Service>;
+pub type Services = HashMap<String, Entry>;
 
 pub const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 10; // in seconds
 
@@ -30,6 +30,11 @@ pub enum Log {
     #[default]
     Ring,
     Stdout,
+}
+
+pub enum Entry {
+    Service(Service),
+    Directory(Services),
 }
 
 fn default_shutdown_timeout_fn() -> u64 {
@@ -61,6 +66,12 @@ impl Service {
         if self.exec.is_empty() {
             bail!("missing exec directive");
         }
+        for service in self.after.iter() {
+            if service.contains('/') {
+                // to make sure dependencies doesn't extend to another group
+                bail!("services can't have /: {}", service)
+            }
+        }
 
         Signal::from_str(&self.signal.stop.to_uppercase())?;
 
@@ -90,10 +101,23 @@ pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
 /// a file, the callback can decide to either ignore the file, or stop
 /// the directory walking
 pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
+    load_dir_with_prefix(p, "".to_string())
+}
+
+pub fn load_dir_with_prefix<T: AsRef<Path>>(p: T, prefix: String) -> Result<Services> {
     let mut services: Services = HashMap::new();
 
     for entry in fs::read_dir(p)? {
         let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let mut name = entry.file_name().into_string().expect("not a valid name");
+            if !prefix.is_empty() {
+                name = format!("{}/{}", prefix, name);
+            }
+            let entries = load_dir_with_prefix(entry.path(), name.clone())?;
+            services.insert(name, Entry::Directory(entries));
+            continue;
+        }
         if !entry.file_type()?.is_file() {
             continue;
         }
@@ -104,7 +128,7 @@ pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
             continue;
         }
 
-        let (name, service) = match load(&fp) {
+        let (name, mut service) = match load(&fp) {
             Ok(content) => content,
             Err(err) => {
                 error!("failed to load config file {:?}: {}", fp, err);
@@ -112,8 +136,19 @@ pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
             }
         };
 
-        services.insert(name, service);
+        if prefix.is_empty() {
+            services.insert(name, Entry::Service(service));
+        } else {
+            update_dependencies(prefix.clone(), &mut service);
+            services.insert(format!("{}/{}", prefix, name), Entry::Service(service));
+        }
     }
 
     Ok(services)
+}
+
+fn update_dependencies(prefix: String, service: &mut Service) {
+    for i in service.after.iter_mut() {
+        *i = format!("{}/{}", prefix, i);
+    }
 }

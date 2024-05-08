@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::time;
 
+use self::api::Status;
+
 fn logger(level: log::LevelFilter) -> Result<()> {
     let logger = fern::Dispatch::new()
         .format(|out, message, record| {
@@ -135,10 +137,25 @@ pub async fn restart(socket: &str, name: &str) -> Result<()> {
     client.stop(name).await?;
     //pull status
     for _ in 0..20 {
-        let result = client.status(name).await?;
-        if result.pid == 0 && result.target == "Down" {
-            client.start(name).await?;
-            return Ok(());
+        match client.status(name).await? {
+            Status::Service(result) => {
+                if result.pid == 0 && result.target == "Down" {
+                    client.start(name).await?;
+                    return Ok(());
+                }
+            }
+            Status::Group(result) => {
+                let mut start = true;
+                for service in result.services {
+                    if service.pid != 0 || service.target != "Down" {
+                        start = false;
+                    }
+                }
+                if start {
+                    client.start(name).await?;
+                    return Ok(());
+                }
+            }
         }
         time::sleep(std::time::Duration::from_secs(1)).await;
     }
