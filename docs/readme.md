@@ -22,6 +22,7 @@ When running zinit in a container, supply the `--container` argument to the init
 exec: "command line to start service"
 test: "command line to test service is running" # optional
 oneshot: true or false (false by default)
+cron: amount of seconds # creates a cronjob, oneshot MUST be set to true
 after: # list of services that we depend on (optional)
   - service1_name
   - service2_name
@@ -32,7 +33,8 @@ env:
   KEY: VALUE
 ```
 
-- `oneshot` service is not going to re-spawn when it exits.
+- `oneshot` service is not going to re-spawn when it exits, except when `cron` has a value > 0.
+- `cron` is used to create a cronjob. This only works when `oneshot` is set to `true`.
 - if a service depends on a `oneshot` services, it will not get started, unless the oneshot service exits with success.
 - if a service depends on another service (that is not `oneshot`), it will not get started, unless the service is marked as `running`
 - a service with no test command is marked running if it successfully executed, regardless if it exits immediately after or not, hence a test command is useful.

@@ -546,13 +546,7 @@ impl ZInit {
         let name = name.clone();
         let mut service = input.write().await;
 
-        if service.target == Target::Down {
-            debug!("service '{}' target is down", name);
-            return;
-        }
-
-        if service.scheduled {
-            debug!("service '{}' already scheduled", name);
+        if service.target == Target::Down || service.scheduled {
             return;
         }
 
@@ -567,9 +561,7 @@ impl ZInit {
                     break;
                 }
                 let config = service.service.clone();
-                // Release the lock; enables other services to aquire it and schedule
-                // themselves
-                drop(service);
+                drop(service); // Release the lock
 
                 // Wait for dependencies
                 while !self.can_schedule(&config).await {
@@ -585,10 +577,7 @@ impl ZInit {
                 };
 
                 let mut service = input.write().await;
-                // We check again in case target has changed. Since we had to release the lock
-                // earlier to not block locking on this service (for example if a stop was called)
-                // while the service was waiting for dependencies.
-                // The lock is kept until the spawning and the update of the pid.
+
                 if service.target == Target::Down {
                     // Service target is down; exit the loop
                     break;
@@ -615,99 +604,42 @@ impl ZInit {
                     }
                 };
 
-                if config.one_shot {
-                    service.state.set(State::Running);
-                }
-
-                // We don't lock the here here because this can take forever
-                // to finish. So, we allow other operation on the service (for example)
-                // status and stop operations.
+                // Since only oneshot services can have cron, we are in oneshot mode
+                service.state.set(State::Running);
                 drop(service); // Release the lock
 
-                let mut handler = None;
-                if !config.one_shot {
-                    let m = self.clone();
-                    handler = Some(tokio::spawn(m.test(name.clone(), config.clone())));
-                }
+                // Wait for the child process to finish
+                let wait_result = child.wait().await;
 
-                // Prepare futures for selection
-                let cron_future = config
-                    .cron
-                    .map(|cron_duration| tokio::time::sleep(Duration::from_secs(cron_duration)));
+                let mut service = input.write().await;
+                service.pid = Pid::from_raw(0);
 
-                let child_pid = child.pid;
-                let wait_future = child.wait();
-
-                // Use select to wait on the child process or the cron future
-                tokio::select! {
-                    result = wait_future => {
-                        // The child process has exited
-                        if let Some(handler) = handler {
-                            handler.abort();
-                        }
-
-                        let mut service = input.write().await;
-                        service.pid = Pid::from_raw(0);
-
-                        match result {
-                            Err(err) => {
-                                error!("failed to read service '{}' status: {}", name, err);
-                                service.state.set(State::Unknown);
-                            }
-                            Ok(status) => service.state.set(match status.success() {
-                                true => State::Success,
-                                false => State::Error(status),
-                            }),
-                        }
-                        drop(service);
-
-                        if config.one_shot {
-                            // For oneshot services, we don't need to restart
-                            self.notify.notify_waiters();
-                            break;
-                        }
+                match wait_result {
+                    Err(err) => {
+                        error!("failed to read service '{}' status: {}", name, err);
+                        service.state.set(State::Unknown);
                     }
-                    _ = async {
-                        if let Some(cron_fut) = cron_future {
-                            cron_fut.await;
-                        } else {
-                            futures::future::pending::<()>().await;
-                        }
-                    } => {
-                        // Cron duration elapsed
-                        if *self.shutdown.read().await {
-                            // If shutting down, exit the loop
-                            break;
-                        }
-
-                        let service = input.read().await;
-                        if service.target == Target::Down {
-                            break;
-                        }
-                        let signal_name = service.service.signal.stop.to_uppercase();
-                        drop(service);
-
-                        let signal = match signal::Signal::from_str(&signal_name) {
-                            Ok(signal) => signal,
-                            Err(err) => {
-                                error!("unknown stop signal configured in service '{}': {}", name, err);
-                                break;
-                            }
-                        };
-
-                        // Send stop signal to the process group
-                        let _ = self.pm.signal(child_pid, signal);
-
-                        // Optionally wait for the service to stop
-                        time::sleep(Duration::from_secs(1)).await;
-                    }
+                    Ok(status) => service.state.set(match status.success() {
+                        true => State::Success,
+                        false => State::Error(status),
+                    }),
                 }
+                drop(service); // Release the lock
 
-                // Allow some time before potentially restarting the service
-                time::sleep(Duration::from_secs(1)).await;
+                // Check if we should schedule the service again based on cron
+                if let Some(cron_duration) = config.cron {
+                    if *self.shutdown.read().await {
+                        // If shutting down, exit the loop
+                        break;
+                    }
+                    // Wait for the specified cron duration
+                    tokio::time::sleep(std::time::Duration::from_secs(cron_duration)).await;
+                    // Loop will restart and the oneshot service will be executed again
+                } else {
+                    // No cron specified, exit the loop after the oneshot execution
+                    break;
+                }
             }
-
-            // The loop will repeat unless we break out due to shutdown or service being down
         }
 
         let mut service = input.write().await;
