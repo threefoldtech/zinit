@@ -52,6 +52,7 @@ pub struct Service {
     pub log: Log,
     pub env: HashMap<String, String>,
     pub dir: String,
+    pub cron: Option<u64>,
 }
 
 impl Service {
@@ -63,6 +64,16 @@ impl Service {
         }
 
         Signal::from_str(&self.signal.stop.to_uppercase())?;
+
+        // Validate the cron field if present
+        if let Some(cron_value) = self.cron {
+            if cron_value == 0 {
+                bail!("cron value must be greater than zero");
+            }
+            if !self.one_shot {
+                bail!("cron can only be specified for oneshot services");
+            }
+        }
 
         Ok(())
     }

@@ -12,12 +12,13 @@ use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::sync::{Notify, RwLock};
-use tokio::time;
 use tokio::time::timeout;
+use tokio::time::{self};
 use tokio_stream::{wrappers::WatchStream, StreamExt};
 
 pub trait WaitStatusExt {
@@ -543,8 +544,8 @@ impl ZInit {
 
     async fn watch(self, name: String, input: Arc<RwLock<ZInitService>>) {
         let name = name.clone();
-
         let mut service = input.write().await;
+
         if service.target == Target::Down {
             debug!("service '{}' target is down", name);
             return;
@@ -556,123 +557,157 @@ impl ZInit {
         }
 
         service.scheduled = true;
-        drop(service);
+        drop(service); // Release the lock
 
         loop {
-            let name = name.clone();
-
-            let service = input.read().await;
-            // early check if service is down, so we don't have to do extra checks
-            if service.target == Target::Down {
-                // we check target in loop in case service have
-                // been set down.
-                break;
-            }
-            let config = service.service.clone();
-            // we need to spawn this service now, but is it ready?
-            // are all dependent services are running ?
-
-            // so we drop the table to give other services
-            // chance to acquire the lock and schedule themselves
-            drop(service);
-
-            'checks: loop {
-                let sig = self.notify.notified();
-                debug!("checking {} if it can schedule", name);
-                if self.can_schedule(&config).await {
-                    debug!("service {} can schedule", name);
-                    break 'checks;
-                }
-
-                self.set(&name, Some(State::Blocked), None).await;
-                // don't even care if i am lagging
-                // as long i am notified that some services status
-                // has changed
-                debug!("service {} is blocked, waiting release", name);
-                sig.await;
-            }
-
-            let log = match config.log {
-                config::Log::None => Log::None,
-                config::Log::Stdout => Log::Stdout,
-                config::Log::Ring => Log::Ring(name.clone()),
-            };
-
-            let mut service = input.write().await;
-            // we check again in case target has changed. Since we had to release the lock
-            // earlier to not block locking on this service (for example if a stop was called)
-            // while the service was waiting for dependencies.
-            // the lock is kept until the spawning and the update of the pid.
-            if service.target == Target::Down {
-                // we check target in loop in case service have
-                // been set down.
-                break;
-            }
-
-            let child = self
-                .pm
-                .run(
-                    Process::new(&config.exec, &config.dir, Some(config.env.clone())),
-                    log.clone(),
-                )
-                .await;
-
-            let child = match child {
-                Ok(child) => {
-                    service.state.set(State::Spawned);
-                    service.pid = child.pid;
-                    child
-                }
-                Err(err) => {
-                    // so, spawning failed. and nothing we can do about it
-                    // this can be duo to a bad command or exe not found.
-                    // set service to failure.
-                    error!("service {} failed to start: {}", name, err);
-                    service.state.set(State::Failure);
+            {
+                let service = input.read().await;
+                if service.target == Target::Down {
+                    // Service target is down; exit the loop
                     break;
                 }
-            };
+                let config = service.service.clone();
+                // Release the lock; enables other services to aquire it and schedule
+                // themselves
+                drop(service);
 
-            if config.one_shot {
-                service.state.set(State::Running);
-            }
-            // we don't lock the here here because this can take forever
-            // to finish. so we allow other operation on the service (for example)
-            // status and stop operations.
-            drop(service);
-
-            let mut handler = None;
-            if !config.one_shot {
-                let m = self.clone();
-                handler = Some(tokio::spawn(m.test(name.clone(), config.clone())));
-            }
-
-            let result = child.wait().await;
-            if let Some(handler) = handler {
-                handler.abort();
-            }
-
-            let mut service = input.write().await;
-            service.pid = Pid::from_raw(0);
-            match result {
-                Err(err) => {
-                    error!("failed to read service '{}' status: {}", name, err);
-                    service.state.set(State::Unknown);
+                // Wait for dependencies
+                while !self.can_schedule(&config).await {
+                    let sig = self.notify.notified();
+                    self.set(&name, Some(State::Blocked), None).await;
+                    sig.await;
                 }
-                Ok(status) => service.state.set(match status.success() {
-                    true => State::Success,
-                    false => State::Error(status),
-                }),
-            };
 
-            drop(service);
-            if config.one_shot {
-                // we don't need to restart the service anymore
-                self.notify.notify_waiters();
-                break;
+                let log = match config.log {
+                    config::Log::None => Log::None,
+                    config::Log::Stdout => Log::Stdout,
+                    config::Log::Ring => Log::Ring(name.clone()),
+                };
+
+                let mut service = input.write().await;
+                // We check again in case target has changed. Since we had to release the lock
+                // earlier to not block locking on this service (for example if a stop was called)
+                // while the service was waiting for dependencies.
+                // The lock is kept until the spawning and the update of the pid.
+                if service.target == Target::Down {
+                    // Service target is down; exit the loop
+                    break;
+                }
+
+                let child = match self
+                    .pm
+                    .run(
+                        Process::new(&config.exec, &config.dir, Some(config.env.clone())),
+                        log.clone(),
+                    )
+                    .await
+                {
+                    Ok(child) => {
+                        service.state.set(State::Spawned);
+                        service.pid = child.pid;
+                        child
+                    }
+                    Err(err) => {
+                        error!("service {} failed to start: {}", name, err);
+                        service.state.set(State::Failure);
+                        // Decide whether to break or continue based on your logic
+                        break;
+                    }
+                };
+
+                if config.one_shot {
+                    service.state.set(State::Running);
+                }
+
+                // We don't lock the here here because this can take forever
+                // to finish. So, we allow other operation on the service (for example)
+                // status and stop operations.
+                drop(service); // Release the lock
+
+                let mut handler = None;
+                if !config.one_shot {
+                    let m = self.clone();
+                    handler = Some(tokio::spawn(m.test(name.clone(), config.clone())));
+                }
+
+                // Prepare futures for selection
+                let cron_future = config
+                    .cron
+                    .map(|cron_duration| tokio::time::sleep(Duration::from_secs(cron_duration)));
+
+                let child_pid = child.pid;
+                let wait_future = child.wait();
+
+                // Use select to wait on the child process or the cron future
+                tokio::select! {
+                    result = wait_future => {
+                        // The child process has exited
+                        if let Some(handler) = handler {
+                            handler.abort();
+                        }
+
+                        let mut service = input.write().await;
+                        service.pid = Pid::from_raw(0);
+
+                        match result {
+                            Err(err) => {
+                                error!("failed to read service '{}' status: {}", name, err);
+                                service.state.set(State::Unknown);
+                            }
+                            Ok(status) => service.state.set(match status.success() {
+                                true => State::Success,
+                                false => State::Error(status),
+                            }),
+                        }
+                        drop(service);
+
+                        if config.one_shot {
+                            // For oneshot services, we don't need to restart
+                            self.notify.notify_waiters();
+                            break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(cron_fut) = cron_future {
+                            cron_fut.await;
+                        } else {
+                            futures::future::pending::<()>().await;
+                        }
+                    } => {
+                        // Cron duration elapsed
+                        if *self.shutdown.read().await {
+                            // If shutting down, exit the loop
+                            break;
+                        }
+
+                        let service = input.read().await;
+                        if service.target == Target::Down {
+                            break;
+                        }
+                        let signal_name = service.service.signal.stop.to_uppercase();
+                        drop(service);
+
+                        let signal = match signal::Signal::from_str(&signal_name) {
+                            Ok(signal) => signal,
+                            Err(err) => {
+                                error!("unknown stop signal configured in service '{}': {}", name, err);
+                                break;
+                            }
+                        };
+
+                        // Send stop signal to the process group
+                        let _ = self.pm.signal(child_pid, signal);
+
+                        // Optionally wait for the service to stop
+                        time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+
+                // Allow some time before potentially restarting the service
+                time::sleep(Duration::from_secs(1)).await;
             }
-            // we trying again in 2 seconds
-            time::sleep(std::time::Duration::from_secs(2)).await;
+
+            // The loop will repeat unless we break out due to shutdown or service being down
         }
 
         let mut service = input.write().await;
