@@ -30,6 +30,7 @@ pub enum Log {
     #[default]
     Ring,
     Stdout,
+    File,
 }
 
 fn default_shutdown_timeout_fn() -> u64 {
@@ -50,6 +51,7 @@ pub struct Service {
     pub after: Vec<String>,
     pub signal: Signal,
     pub log: Log,
+    pub log_file: Option<String>,
     pub env: HashMap<String, String>,
     pub dir: String,
 }
@@ -63,6 +65,13 @@ impl Service {
         }
 
         Signal::from_str(&self.signal.stop.to_uppercase())?;
+
+        // Validate `log_file` when `log` is `File`
+        if let Log::File = self.log {
+            if self.log_file.is_none() {
+                bail!("log_file must be specified when log is set to 'file'");
+            }
+        }
 
         Ok(())
     }

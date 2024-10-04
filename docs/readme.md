@@ -27,7 +27,8 @@ after: # list of services that we depend on (optional)
   - service2_name
 signal: # optional section
   stop: SIGKILL # the signal sent on `stop` action. default to SIGTERM
-log: null | ring | stdout
+log: null | ring | stdout | file
+log_file: "/path/to/logfile" # required that `log` is set to `file`
 env:
   KEY: VALUE
 ```
