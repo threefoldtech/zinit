@@ -1,11 +1,13 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use cron::Schedule;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml as yaml;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::Path;
 pub type Services = HashMap<String, Service>;
+use std::str::FromStr;
 
 pub const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 10; // in seconds
 
@@ -52,7 +54,8 @@ pub struct Service {
     pub log: Log,
     pub env: HashMap<String, String>,
     pub dir: String,
-    pub cron: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_cron_option")]
+    pub cron: Option<Schedule>,
 }
 
 impl Service {
@@ -65,14 +68,9 @@ impl Service {
 
         Signal::from_str(&self.signal.stop.to_uppercase())?;
 
-        // Validate the cron field if present
-        if let Some(cron_value) = self.cron {
-            if cron_value == 0 {
-                bail!("cron value must be greater than zero");
-            }
-            if !self.one_shot {
-                bail!("cron can only be specified for oneshot services");
-            }
+        // Cron jobs only possible for oneshot services
+        if self.cron.is_some() && !self.one_shot {
+            bail!("cron can only be used for oneshot services");
         }
 
         Ok(())
@@ -127,4 +125,19 @@ pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
     }
 
     Ok(services)
+}
+
+/// Custom deserializer to parse cron expression from string
+fn deserialize_cron_option<'de, D>(deserializer: D) -> Result<Option<Schedule>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(s) = s {
+        let schedule = Schedule::from_str(&s).map_err(D::Error::custom)?;
+        Ok(Some(schedule))
+    } else {
+        Ok(None)
+    }
 }
