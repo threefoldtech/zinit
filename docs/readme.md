@@ -68,6 +68,8 @@ exec: redis-server --port 7777
 test: redis-cli -p 7777 PING
 after:
   - redis-init
+log: file
+log_file: redis_log.txt
 ```
 
 redis-after.yaml
