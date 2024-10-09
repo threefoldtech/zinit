@@ -60,6 +60,8 @@ pub struct Service {
 
 impl Service {
     pub fn validate(&self) -> Result<()> {
+        println!("Validating service from dir:{}", self.dir);
+
         use nix::sys::signal::Signal;
         use std::str::FromStr;
         if self.exec.is_empty() {
@@ -99,6 +101,7 @@ pub fn load<T: AsRef<Path>>(t: T) -> Result<(String, Service)> {
 /// a file, the callback can decide to either ignore the file, or stop
 /// the directory walking
 pub fn load_dir<T: AsRef<Path>>(p: T) -> Result<Services> {
+    println!("loading services from directory");
     let mut services: Services = HashMap::new();
 
     for entry in fs::read_dir(p)? {

@@ -43,6 +43,8 @@ pub enum ZInitError {
     ServiceISDown { name: String },
     #[error("zinit is shutting down")]
     ShuttingDown,
+    #[error("service {name:?} has a dependency to a cronjob")]
+    ServiceCronDependency { name: String },
 }
 /// Process is a representation of a scheduled/running
 /// service
@@ -148,6 +150,8 @@ pub enum State {
     /// Failure means the service has failed to spawn in a way that retyring
     /// won't help, like command line parsing error or failed to fork
     Failure,
+    /// service has been schedulded to run (cronjob)
+    ScheduledCron,
 }
 
 type Table = HashMap<String, Arc<RwLock<ZInitService>>>;
@@ -209,6 +213,18 @@ impl ZInit {
 
         if services.contains_key(&name) {
             bail!(ZInitError::ServiceAlreadyMonitored { name })
+        }
+
+        // Check that service does not have dependecies that are cron jobs
+        for dep in &service.after {
+            let table = self.services.read().await;
+            if let Some(dep_service_lock) = table.get(dep) {
+                if dep_service_lock.read().await.service.cron.is_some() {
+                    bail!("Serivce {} cannot depend on cron job {}", name, dep);
+                }
+            } else {
+                bail!("Service {} is dependent on unknown service '{}'", name, dep);
+            }
         }
 
         let service = Arc::new(RwLock::new(ZInitService::new(service, State::Unknown)));
@@ -543,17 +559,124 @@ impl ZInit {
         }
     }
 
-    async fn watch(self, name: String, input: Arc<RwLock<ZInitService>>) {
-        let name = name.clone();
-        let mut service = input.write().await;
+    async fn handle_scheduling(&self, name: &str, config: &config::Service) -> Result<()> {
+        println!("entering handle_scheduling function");
+        'checks: loop {
+            let sig = self.notify.notified();
+            debug!("checking {} if it can schedule", name);
+            if self.can_schedule(config).await {
+                debug!("service {} can schedule", name);
+                break 'checks;
+            }
 
-        if service.target == Target::Down {
-            debug!("service '{}' target is down", name);
-            return;
+            self.set(name, Some(State::Blocked), None).await;
+            // don't even care if i am lagging
+            // as long i am notified that some services status
+            // has changed
+            debug!("service {} is blocked, waiting release", name);
+            sig.await;
+        }
+        println!("EXITING handle_scheduling function");
+        Ok(())
+    }
+
+    async fn wait_for_cron_schedule(&self, name: &str, config: &config::Service) -> Result<()> {
+        println!("entering wait_for_cron_schedule function");
+        if let Some(ref schedule) = config.cron {
+            let now: DateTime<Utc> = Utc::now();
+            if let Some(next_datetime) = schedule.upcoming(Utc).next() {
+                let duration = next_datetime
+                    .signed_duration_since(now)
+                    .to_std()
+                    .unwrap_or(Duration::from_secs(0));
+
+                self.set(name, Some(State::ScheduledCron), None).await;
+                debug!("service {} scheduled to run at {}", name, next_datetime);
+                sleep_until(Instant::now() + duration).await;
+
+                if *self.shutdown.read().await || self.is_target_down(name).await {
+                    return Err(anyhow!(
+                        "Service '{}' is shutting down or target is down",
+                        name
+                    ));
+                }
+            } else {
+                debug!("service '{}' has no more scheduled runs", name);
+                return Err(anyhow!("No more scheduled runs for service '{}'", name));
+            }
         }
 
-        if service.scheduled {
-            debug!("service '{}' already scheduled", name);
+        println!("EXITING wait_for_cron_schedule function");
+        Ok(())
+    }
+
+    async fn run_service(
+        &self,
+        name: &str,
+        input: &Arc<RwLock<ZInitService>>,
+        config: &config::Service,
+    ) -> Result<()> {
+        println!("entering run_service function");
+        let log = match config.log {
+            config::Log::None => Log::None,
+            config::Log::Stdout => Log::Stdout,
+            config::Log::Ring => Log::Ring(name.to_string()),
+        };
+
+        println!("1");
+        let mut service = input.write().await;
+        println!("2");
+
+        if service.target == Target::Down {
+            return Err(anyhow!("Service '{}' target is down", name));
+        }
+        println!("3");
+
+        let child = self
+            .pm
+            .run(
+                Process::new(&config.exec, &config.dir, Some(config.env.clone())),
+                log.clone(),
+            )
+            .await?;
+        println!("4");
+
+        service.state.set(State::Spawned);
+        service.pid = child.pid;
+        println!("run_service funciton: dropping write lock");
+        drop(service);
+        println!("run_service funciton: dropped write lock");
+
+        let result = child.wait().await;
+
+        println!("run_service funciton: aqcuiring write lock");
+        let mut service = input.write().await;
+        println!("run_service funciton: got write lock");
+        service.pid = Pid::from_raw(0);
+
+        match result {
+            Err(err) => {
+                error!("Failed to read service '{}' status: {}", name, err);
+                service.state.set(State::Unknown);
+            }
+            Ok(status) => {
+                service.state.set(if status.success() {
+                    State::Success
+                } else {
+                    State::Error(status)
+                });
+            }
+        }
+
+        println!("EXITING run_service function");
+        Ok(())
+    }
+
+    async fn watch(self, name: String, input: Arc<RwLock<ZInitService>>) {
+        println!("entering watch function");
+        let mut service = input.write().await;
+
+        if service.target == Target::Down || service.scheduled {
             return;
         }
 
@@ -561,159 +684,230 @@ impl ZInit {
         drop(service); // Release the lock
 
         loop {
-            let name = name.clone();
-
-            let service = input.read().await;
-            // early check if service is down, so we don't have to do extra checks
-            if service.target == Target::Down {
-                // we check target in loop in case service have
-                // been set down.
+            println!("entering watch function loop");
+            if let Err(err) = self
+                .handle_scheduling(&name, &input.read().await.service)
+                .await
+            {
+                error!("Scheduling error for '{}': {}", name, err);
                 break;
             }
-            let config = service.service.clone();
-            // we need to spawn this service now, but is it ready?
-            // are all dependent services are running ?
 
-            // so we drop the table to give other services
-            // chance to acquire the lock and schedule themselves
-            drop(service);
-
-            'checks: loop {
-                let sig = self.notify.notified();
-                debug!("checking {} if it can schedule", name);
-                if self.can_schedule(&config).await {
-                    debug!("service {} can schedule", name);
-                    break 'checks;
-                }
-
-                self.set(&name, Some(State::Blocked), None).await;
-                // don't even care if i am lagging
-                // as long i am notified that some services status
-                // has changed
-                debug!("service {} is blocked, waiting release", name);
-                sig.await;
+            if let Err(err) = self
+                .wait_for_cron_schedule(&name, &input.read().await.service)
+                .await
+            {
+                debug!("Service '{}' scheduling completed: {}", name, err);
+                break;
             }
 
-            // If cron is specified for a oneshot service, schedule the execution
-            if let Some(ref schedule) = config.cron {
-                // Get current time
-                let now: DateTime<Utc> = Utc::now();
+            let service_clone = {
+                let service_read_guard = input.read().await;
+                service_read_guard.service.clone()
+            };
+            if let Err(err) = self.run_service(&name, &input, &service_clone).await {
+                error!("Error running service '{}': {}", name, err);
+                break;
+            }
 
-                // Get next scheduled time
-                if let Some(next_datetime) = schedule.upcoming(Utc).next() {
-                    let duration = next_datetime
-                        .signed_duration_since(now)
-                        .to_std()
-                        .unwrap_or(Duration::from_secs(0));
+            let config = input.read().await.service.clone();
 
-                    // Wait until the next scheduled time
-                    debug!("service {} scheduled to run at {}", name, next_datetime);
-                    sleep_until(Instant::now() + duration).await;
-
-                    // Before executing, check if service is still up and not shutting down
-                    if *self.shutdown.read().await || self.is_target_down(&name).await {
-                        break;
-                    }
-                } else {
-                    // No upcoming scheduled times; exit the loop
-                    debug!("service '{}' has not more scheduled runs", name);
-                    break;
-                }
+            if config.one_shot && config.cron.is_some() {
+                continue; // Schedule the next execution
             } else if config.one_shot {
-                // For oneshot services without cron, proceed immediately
-                debug!(
-                    "service '{}' is a oneshot service without cron; starting immediately",
-                    name
-                );
+                self.notify.notify_waiters();
+                break; // No cron; exit the loop
             } else {
-                // For non-oneshot services, proceed as usual
-                debug!("service '{}' is not a oneshot service: proceeding", name);
-            }
-
-            let log = match config.log {
-                config::Log::None => Log::None,
-                config::Log::Stdout => Log::Stdout,
-                config::Log::Ring => Log::Ring(name.clone()),
-            };
-
-            let mut service = input.write().await;
-            // we check again in case target has changed. Since we had to release the lock
-            // earlier to not block locking on this service (for example if a stop was called)
-            // while the service was waiting for dependencies.
-            // the lock is kept until the spawning and the update of the pid.
-            if service.target == Target::Down {
-                // we check target in loop in case service have
-                // been set down.
-                break;
-            }
-
-            let child = self
-                .pm
-                .run(
-                    Process::new(&config.exec, &config.dir, Some(config.env.clone())),
-                    log.clone(),
-                )
-                .await;
-
-            let child = match child {
-                Ok(child) => {
-                    service.state.set(State::Spawned);
-                    service.pid = child.pid;
-                    child
-                }
-                Err(err) => {
-                    // so, spawning failed. and nothing we can do about it
-                    // this can be duo to a bad command or exe not found.
-                    // set service to failure.
-                    error!("service {} failed to start: {}", name, err);
-                    service.state.set(State::Failure);
-                    break;
-                }
-            };
-
-            service.state.set(State::Running);
-            drop(service);
-
-            // Wait for the child process to finish
-            let result = child.wait().await;
-
-            let mut service = input.write().await;
-            service.pid = Pid::from_raw(0);
-
-            match result {
-                Err(err) => {
-                    error!("failed to read service '{}' status: {}", name, err);
-                    service.state.set(State::Unknown);
-                }
-                Ok(status) => {
-                    service.state.set(if status.success() {
-                        State::Success
-                    } else {
-                        State::Error(status)
-                    });
-                }
-            }
-
-            drop(service);
-
-            // For oneshot services with cron, loop to schedule next execution
-            if config.one_shot {
-                if config.cron.is_some() {
-                    continue; // Schedule the next execution
-                } else {
-                    self.notify.notify_waiters();
-                    break; // No cron; exit the loop
-                }
-            } else {
-                // For non-oneshot services, handle respawn logic
-                // Wait before restarting
                 time::sleep(Duration::from_secs(2)).await;
             }
         }
 
         let mut service = input.write().await;
         service.scheduled = false;
+        println!("EXITING watch function");
     }
+
+    // async fn watch(self, name: String, input: Arc<RwLock<ZInitService>>) {
+    //     println!("entering watch function for {}", name.clone());
+    //     let name = name.clone();
+    //     let mut service = input.write().await;
+    //
+    //     if service.target == Target::Down {
+    //         debug!("service '{}' target is down", name);
+    //         return;
+    //     }
+    //
+    //     if service.scheduled {
+    //         debug!("service '{}' already scheduled", name);
+    //         return;
+    //     }
+    //
+    //     service.scheduled = true;
+    //     drop(service); // Release the lock
+    //
+    //     loop {
+    //         let name = name.clone();
+    //
+    //         let service = input.read().await;
+    //         // early check if service is down, so we don't have to do extra checks
+    //         if service.target == Target::Down {
+    //             // we check target in loop in case service have
+    //             // been set down.
+    //             break;
+    //         }
+    //         let config = service.service.clone();
+    //         // we need to spawn this service now, but is it ready?
+    //         // are all dependent services are running ?
+    //
+    //         // so we drop the table to give other services
+    //         // chance to acquire the lock and schedule themselves
+    //         drop(service);
+    //
+    //         // If cron is specified for a oneshot service, schedule the execution
+    //         if let Some(ref schedule) = config.cron {
+    //             println!("Got a CRON service: {:#?}", schedule);
+    //             // Get current time (for now only UTC time supported)
+    //             // TODO: dynamically adjust to machine's timezone
+    //             let now: DateTime<Utc> = Utc::now();
+    //
+    //             // Get next scheduled time
+    //             if let Some(next_datetime) = schedule.upcoming(Utc).next() {
+    //                 let duration = next_datetime
+    //                     .signed_duration_since(now)
+    //                     .to_std()
+    //                     .unwrap_or(Duration::from_secs(0));
+    //
+    //                 debug!("service {} scheduled to run at {}", name, next_datetime);
+    //                 println!("service {} scheduled to run at {}", name, next_datetime);
+    //                 // Set state of service to `Scheduled`
+    //                 self.set(&name, Some(State::ScheduledCron), None).await;
+    //                 // Wait until the next scheduled time
+    //                 sleep_until(Instant::now() + duration).await;
+    //
+    //                 // Before executing, check if service is still up and not shutting down
+    //                 if *self.shutdown.read().await || self.is_target_down(&name).await {
+    //                     break;
+    //                 }
+    //             } else {
+    //                 // No upcoming scheduled times; exit the loop
+    //                 debug!("service '{}' has not more scheduled runs", name);
+    //                 println!("service '{}' has not more scheduled runs", name);
+    //                 // break;
+    //             }
+    //         } else if config.one_shot {
+    //             // For oneshot services without cron, proceed immediately
+    //             debug!(
+    //                 "service '{}' is a oneshot service without cron; starting immediately",
+    //                 name
+    //             );
+    //         } else {
+    //             // For non-oneshot services, proceed as usual
+    //             debug!("service '{}' is not a oneshot service: proceeding", name);
+    //         }
+    //
+    //         'checks: loop {
+    //             let sig = self.notify.notified();
+    //             debug!("checking {} if it can schedule", name);
+    //             println!("checking {} if it can schedule", name);
+    //             if self.can_schedule(&config).await {
+    //                 debug!("service {} can schedule", name);
+    //                 println!("service {} can schedule", name);
+    //                 break 'checks;
+    //             }
+    //
+    //             self.set(&name, Some(State::Blocked), None).await;
+    //             // don't even care if i am lagging
+    //             // as long i am notified that some services status
+    //             // has changed
+    //             debug!("service {} is blocked, waiting release", name);
+    //             println!("service {} is blocked, waiting release", name);
+    //             sig.await;
+    //         }
+    //
+    //         let log = match config.log {
+    //             config::Log::None => Log::None,
+    //             config::Log::Stdout => Log::Stdout,
+    //             config::Log::Ring => Log::Ring(name.clone()),
+    //         };
+    //
+    //         let mut service = input.write().await;
+    //         // we check again in case target has changed. Since we had to release the lock
+    //         // earlier to not block locking on this service (for example if a stop was called)
+    //         // while the service was waiting for dependencies.
+    //         // the lock is kept until the spawning and the update of the pid.
+    //         if service.target == Target::Down {
+    //             // we check target in loop in case service have
+    //             // been set down.
+    //             break;
+    //         }
+    //
+    //         let child = self
+    //             .pm
+    //             .run(
+    //                 Process::new(&config.exec, &config.dir, Some(config.env.clone())),
+    //                 log.clone(),
+    //             )
+    //             .await;
+    //
+    //         let child = match child {
+    //             Ok(child) => {
+    //                 service.state.set(State::Spawned);
+    //                 service.pid = child.pid;
+    //                 child
+    //             }
+    //             Err(err) => {
+    //                 // so, spawning failed. and nothing we can do about it
+    //                 // this can be duo to a bad command or exe not found.
+    //                 // set service to failure.
+    //                 error!("service {} failed to start: {}", name, err);
+    //                 service.state.set(State::Failure);
+    //                 break;
+    //             }
+    //         };
+    //
+    //         service.state.set(State::Running);
+    //         drop(service);
+    //
+    //         // Wait for the child process to finish
+    //         let result = child.wait().await;
+    //
+    //         let mut service = input.write().await;
+    //         service.pid = Pid::from_raw(0);
+    //
+    //         match result {
+    //             Err(err) => {
+    //                 error!("failed to read service '{}' status: {}", name, err);
+    //                 service.state.set(State::Unknown);
+    //             }
+    //             Ok(status) => {
+    //                 service.state.set(if status.success() {
+    //                     State::Success
+    //                 } else {
+    //                     State::Error(status)
+    //                 });
+    //             }
+    //         }
+    //
+    //         drop(service);
+    //
+    //         // For oneshot services with cron, loop to schedule next execution
+    //         if config.one_shot {
+    //             if config.cron.is_some() {
+    //                 continue; // Schedule the next execution
+    //             } else {
+    //                 self.notify.notify_waiters();
+    //                 break; // No cron; exit the loop
+    //             }
+    //         } else {
+    //             // For non-oneshot services, handle respawn logic
+    //             // Wait before restarting
+    //             time::sleep(Duration::from_secs(2)).await;
+    //         }
+    //     }
+    //
+    //     let mut service = input.write().await;
+    //     service.scheduled = false;
+    // }
 
     // Helper function to check if the service target is down
     async fn is_target_down(&self, name: &str) -> bool {

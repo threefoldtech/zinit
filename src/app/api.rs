@@ -206,6 +206,7 @@ impl Api {
     }
 
     async fn status<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
+        println!("running status function");
         let status = zinit.status(&name).await?;
 
         let result = Status {
@@ -225,6 +226,7 @@ impl Api {
                 after
             },
         };
+        println!("finished running status function");
 
         Ok(encoder::to_value(result)?)
     }
