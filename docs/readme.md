@@ -22,6 +22,7 @@ When running zinit in a container, supply the `--container` argument to the init
 exec: "command line to start service"
 test: "command line to test service is running" # optional
 oneshot: true or false (false by default)
+cron: "sec min hour day_of_month month day_of_week year"
 after: # list of services that we depend on (optional)
   - service1_name
   - service2_name
@@ -33,7 +34,9 @@ env:
 ```
 
 - `oneshot` service is not going to re-spawn when it exits.
+- `cron` is used to create a cronjob. This only works when `oneshot` is set to `true`.
 - if a service depends on a `oneshot` services, it will not get started, unless the oneshot service exits with success.
+- a service cannot dependent on a service the is `cron`.
 - if a service depends on another service (that is not `oneshot`), it will not get started, unless the service is marked as `running`
 - a service with no test command is marked running if it successfully executed, regardless if it exits immediately after or not, hence a test command is useful.
 - If a test command is provided, the service will not consider running, unless the test command pass
@@ -76,6 +79,15 @@ exec: sh -c "populate redis with seed data"
 oneshot: true
 after:
   - redis
+```
+
+hello_world_cron.yaml
+
+```yaml
+exec: sh -c "echo 'hello each 5 sec from cronjob'"
+oneshot: true
+cron: "*/5 * * * * *"
+log: stdout
 ```
 
 ## Controlling commands
