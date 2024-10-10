@@ -33,9 +33,10 @@ env:
   KEY: VALUE
 ```
 
-- `oneshot` service is not going to re-spawn when it exit.
+- `oneshot` service is not going to re-spawn when it exits.
 - `cron` is used to create a cronjob. This only works when `oneshot` is set to `true`.
 - if a service depends on a `oneshot` services, it will not get started, unless the oneshot service exits with success.
+- a service cannot dependent on a service the is `cron`.
 - if a service depends on another service (that is not `oneshot`), it will not get started, unless the service is marked as `running`
 - a service with no test command is marked running if it successfully executed, regardless if it exits immediately after or not, hence a test command is useful.
 - If a test command is provided, the service will not consider running, unless the test command pass
