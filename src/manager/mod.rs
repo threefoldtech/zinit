@@ -129,20 +129,20 @@ impl ProcessManager {
         });
     }
 
-    fn sink(&self, file: File, prefix: String) {
-        let ring = self.ring.clone();
-        let reader = BufReader::new(file);
-
-        tokio::spawn(async move {
-            let mut lines = reader.lines();
-            while let Ok(line) = lines.next_line().await {
-                let _ = match line {
-                    Some(line) => ring.push(format!("{}: {}", prefix, line)).await,
-                    None => break,
-                };
-            }
-        });
-    }
+    // fn sink(&self, file: File, prefix: String) {
+    //     let ring = self.ring.clone();
+    //     let reader = BufReader::new(file);
+    //
+    //     tokio::spawn(async move {
+    //         let mut lines = reader.lines();
+    //         while let Ok(line) = lines.next_line().await {
+    //             let _ = match line {
+    //                 Some(line) => ring.push(format!("{}: {}", prefix, line)).await,
+    //                 None => break,
+    //             };
+    //         }
+    //     });
+    // }
 
     pub async fn stream(&self, follow: bool) -> Logs {
         self.ring.stream(follow).await
@@ -168,11 +168,29 @@ impl ProcessManager {
 
         let child = child.args(&args[1..]).envs(&self.env.0).envs(cmd.env);
 
+        // Handle logging options
         let child = match log {
             Log::None => child.stdout(Stdio::null()).stderr(Stdio::null()),
             Log::Ring(_) | Log::File(_) => child.stdout(Stdio::piped()).stderr(Stdio::piped()),
             _ => child, // default to inherit
         };
+
+        // Before spawning child, handle log file size management if log is Log::File
+        if let Log::File(ref file_path) = log {
+            // Check if the file exceeds the max size
+            if let Ok(metadata) = fs::metadata(&file_path).await {
+                if metadata.len() >= MAX_LOG_FILE_SIZE {
+                    // Truncate file
+                    fs::remove_file(&file_path)
+                        .await
+                        .context(format!("failed to remove log file '{}'", file_path))?;
+                    // Recreate file
+                    fs::File::create(&file_path)
+                        .await
+                        .context(format!("failed to create new log file '{}'", file_path))?;
+                }
+            }
+        }
 
         let mut table = self.table.lock().await;
 
@@ -183,10 +201,11 @@ impl ProcessManager {
 
         match log.clone() {
             Log::Ring(prefix) => {
-                self.handle_ring_logging(&mut child, prefix).await?;
+                self.handle_logging(&mut child, prefix, None).await?;
             }
             Log::File(file_path) => {
-                self.handle_file_logging(&mut child, file_path, cmd.cmd.clone())
+                let prefix = cmd.cmd.clone();
+                self.handle_logging(&mut child, prefix, Some(file_path))
                     .await?;
             }
             _ => {}
@@ -202,130 +221,68 @@ impl ProcessManager {
         Ok(Child::new(pid, rx))
     }
 
-    async fn handle_ring_logging(
+    async fn handle_logging(
         &self,
         child: &mut std::process::Child,
         prefix: String,
+        file_path: Option<String>,
     ) -> Result<()> {
         let _ = self
             .ring
             .push(format!("[-] {}: ------------ [start] ------------", prefix))
             .await;
 
+        let file_writer = if let Some(ref file_path) = file_path {
+            // Open the log file in append mode
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file_path)
+                .await
+                .context(format!("failed to open log file '{}'", file_path))?;
+            Some(Arc::new(Mutex::new(file)))
+        } else {
+            None
+        };
+
         if let Some(out) = child.stdout.take() {
             let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
-            self.sink(out, format!("[+] {}", prefix));
+            self.sink(out, format!("[+] {}", prefix), file_writer.clone());
         }
 
         if let Some(out) = child.stderr.take() {
             let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
-            self.sink(out, format!("[-] {}", prefix));
+            self.sink(out, format!("[-] {}", prefix), file_writer.clone());
         }
 
         Ok(())
     }
 
-    async fn handle_file_logging(
-        &self,
-        child: &mut std::process::Child,
-        file_path: String,
-        prefix: String,
-    ) -> Result<()> {
-        // Check if the file exceeds the maximum size
-        if let Ok(metadata) = fs::metadata(&file_path).await {
-            if metadata.len() >= MAX_LOG_FILE_SIZE {
-                // Truncate the file
-                fs::remove_file(&file_path).await?;
-                // Recreate the file
-                fs::File::create(&file_path).await?;
-            }
-        }
-
-        // Open the log file in append mode
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-            .await
-            .context(format!("failed to open log file '{}'", file_path))?;
-
-        // Wrap file in BufWriter
-        let writer = BufWriter::new(file);
-        let writer = Arc::new(Mutex::new(writer)); // Shared writer
-
-        if let Some(stdout) = child.stdout.take() {
-            let stdout_writer = Arc::clone(&writer);
-            let stdout = File::from_std(unsafe { StdFile::from_raw_fd(stdout.into_raw_fd()) });
-            self.sink_with_file(stdout, stdout_writer, prefix.clone(), file_path.clone())
-                .await;
-        }
-
-        if let Some(stderr) = child.stderr.take() {
-            let stderr_writer = Arc::clone(&writer);
-            let stderr = File::from_std(unsafe { StdFile::from_raw_fd(stderr.into_raw_fd()) });
-            self.sink_with_file(stderr, stderr_writer, prefix, file_path)
-                .await;
-        }
-
-        Ok(())
-    }
-
-    async fn sink_with_file(
-        &self,
-        reader: File,
-        writer: Arc<Mutex<BufWriter<tokio::fs::File>>>,
-        prefix: String,
-        file_path: String,
-    ) {
+    fn sink(&self, file: File, prefix: String, file_writer: Option<Arc<Mutex<tokio::fs::File>>>) {
         let ring = self.ring.clone();
+
         tokio::spawn(async move {
-            let mut lines = BufReader::new(reader).lines();
-            while let Ok(line) = lines.next_line().await {
-                match line {
-                    Some(line) => {
-                        // Write to ring buffer
-                        let log_line = format!("{}: {}", prefix, line);
-                        let _ = ring.push(log_line.clone()).await;
-
-                        // Write to file
-                        {
-                            let mut writer = writer.lock().await; // Acquire lock
-                            if let Err(err) = writer.write_all(log_line.as_bytes()).await {
-                                error!("failed to write to log file: {}", err);
-                                break;
-                            }
-                            if let Err(err) = writer.write_all(b"\n").await {
-                                error!("failed to write to log file: {}", err);
-                                break;
-                            }
-                            if let Err(err) = writer.flush().await {
-                                error!("failed to flush log file buffer: {}", err);
-                                break;
-                            }
-                        }
-
-                        // Check file size
-                        if let Ok(metadata) = fs::metadata(&file_path).await {
-                            if metadata.len() >= MAX_LOG_FILE_SIZE {
-                                // Truncate the file
-                                {
-                                    let mut writer = writer.lock().await;
-                                    if let Err(err) = writer.get_ref().set_len(0).await {
-                                        error!("failed to truncate log file: {}", err);
-                                        break;
-                                    }
-                                    if let Err(err) = writer.flush().await {
-                                        error!(
-                                            "failed to flush log file buffer after truncation: {}",
-                                            err
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+            let reader = BufReader::new(file);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let log_line = format!("{}: {}", prefix, line);
+                // Write to ring buffer
+                let _ = ring.push(log_line.clone()).await;
+                // Write to file if applicable
+                if let Some(ref writer) = file_writer {
+                    let mut writer = writer.lock().await;
+                    if let Err(err) = writer.write_all(log_line.as_bytes()).await {
+                        error!("failed to write to log file: {}", err);
+                        break;
                     }
-                    None => break,
+                    if let Err(err) = writer.write_all(b"\n").await {
+                        error!("failed to write newline to log file: {}", err);
+                        break;
+                    }
+                    if let Err(err) = writer.flush().await {
+                        error!("failed to flush log file: {}", err);
+                        break;
+                    }
                 }
             }
         });
