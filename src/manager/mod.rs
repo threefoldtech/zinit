@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use command_group::CommandGroup;
+use filelogger::RotatingFileLogger;
 use nix::sys::signal;
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd::Pid;
@@ -19,7 +20,10 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
 mod buffer;
+mod filelogger;
 pub use buffer::Logs;
+
+const MAX_LOG_FILE_SIZE: u64 = 1 * 1024 * 1024; // 1 MiB
 
 pub struct Process {
     cmd: String,
@@ -65,6 +69,7 @@ pub enum Log {
     None,
     Stdout,
     Ring(String),
+    File(String),
 }
 
 #[derive(Clone)]
@@ -126,17 +131,27 @@ impl ProcessManager {
         });
     }
 
-    fn sink(&self, file: File, prefix: String) {
+    fn sink(&self, file: File, logger: Option<Arc<Mutex<RotatingFileLogger>>>, prefix: String) {
         let ring = self.ring.clone();
+        let prefix_clone = prefix.clone();
         let reader = BufReader::new(file);
 
         tokio::spawn(async move {
             let mut lines = reader.lines();
             while let Ok(line) = lines.next_line().await {
-                let _ = match line {
-                    Some(line) => ring.push(format!("{}: {}", prefix, line)).await,
+                match line {
+                    Some(line) => {
+                        let log_line = format!("{}: {}", prefix_clone, line);
+                        // write to kernel buffer
+                        let _ = ring.push(log_line.clone()).await;
+                        if let Some(logger) = &logger {
+                            let mut logger = logger.lock().await;
+                            // write to log file
+                            let _ = logger.push(&log_line).await;
+                        }
+                    }
                     None => break,
-                };
+                }
             }
         });
     }
@@ -167,7 +182,7 @@ impl ProcessManager {
 
         let child = match log {
             Log::None => child.stdout(Stdio::null()).stderr(Stdio::null()),
-            Log::Ring(_) => child.stdout(Stdio::piped()).stderr(Stdio::piped()),
+            Log::Ring(_) | Log::File(_) => child.stdout(Stdio::piped()).stderr(Stdio::piped()),
             _ => child, // default to inherit
         };
 
@@ -178,21 +193,18 @@ impl ProcessManager {
             .context("failed to spawn command")?
             .into_inner();
 
-        if let Log::Ring(prefix) = log {
-            let _ = self
-                .ring
-                .push(format!("[-] {}: ------------ [start] ------------", prefix))
-                .await;
-
-            if let Some(out) = child.stdout.take() {
-                let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
-                self.sink(out, format!("[+] {}", prefix))
+        match log {
+            Log::Ring(prefix) => {
+                self.log_service_output(&prefix, None, &mut child).await;
             }
-
-            if let Some(out) = child.stderr.take() {
-                let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
-                self.sink(out, format!("[-] {}", prefix))
+            Log::File(log_file_path) => {
+                let logger = Arc::new(Mutex::new(
+                    RotatingFileLogger::new(&log_file_path, MAX_LOG_FILE_SIZE).await?,
+                ));
+                self.log_service_output(&log_file_path, Some(logger), &mut child)
+                    .await;
             }
+            _ => {}
         }
 
         let (tx, rx) = oneshot::channel();
@@ -203,6 +215,28 @@ impl ProcessManager {
         table.insert(pid, tx);
 
         Ok(Child::new(pid, rx))
+    }
+
+    async fn log_service_output(
+        &self,
+        prefix: &String,
+        logger: Option<Arc<Mutex<RotatingFileLogger>>>,
+        child: &mut std::process::Child,
+    ) {
+        let _ = self
+            .ring
+            .push(format!("[-] {}: ------------ [start] ------------", prefix))
+            .await;
+
+        if let Some(out) = child.stdout.take() {
+            let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
+            self.sink(out, logger.clone(), format!("[+] {}", prefix));
+        }
+
+        if let Some(out) = child.stderr.take() {
+            let out = File::from_std(unsafe { StdFile::from_raw_fd(out.into_raw_fd()) });
+            self.sink(out, logger.clone(), format!("[-] {}", prefix));
+        }
     }
 }
 
