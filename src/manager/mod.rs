@@ -12,6 +12,7 @@ use std::os::unix::io::IntoRawFd;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -69,7 +70,7 @@ pub enum Log {
     None,
     Stdout,
     Ring(String),
-    File(String),
+    File(PathBuf),
 }
 
 #[derive(Clone)]
@@ -77,6 +78,7 @@ pub struct ProcessManager {
     table: Arc<Mutex<HashMap<Pid, Handler>>>,
     ring: buffer::Ring,
     env: Environ,
+    loggers: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<RotatingFileLogger>>>>>,
 }
 
 impl ProcessManager {
@@ -85,6 +87,7 @@ impl ProcessManager {
             table: Arc::new(Mutex::new(HashMap::new())),
             ring: buffer::Ring::new(cap),
             env: Environ::new(),
+            loggers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -197,11 +200,28 @@ impl ProcessManager {
             Log::Ring(prefix) => {
                 self.log_service_output(&prefix, None, &mut child).await;
             }
-            Log::File(log_file_path) => {
-                let logger = Arc::new(Mutex::new(
-                    RotatingFileLogger::new(log_file_path.clone(), MAX_LOG_FILE_SIZE).await?,
-                ));
-                self.log_service_output(&log_file_path, Some(logger), &mut child)
+            Log::File(ref log_file_path) => {
+                let mut loggers = self.loggers.lock().await;
+
+                // Check if logger exists already or create a new one
+                let logger = if let Some(existing_logger) = loggers.get(log_file_path) {
+                    Arc::clone(existing_logger)
+                } else {
+                    let new_logger = Arc::new(Mutex::new(RotatingFileLogger::new(
+                        log_file_path.clone(),
+                        MAX_LOG_FILE_SIZE,
+                    ).await?));
+                    
+                    loggers.insert(log_file_path.clone(), Arc::clone(&new_logger));
+
+                    new_logger
+                };
+
+                drop(loggers);
+
+                let prefix_str = log_file_path.to_string_lossy().to_string();
+
+                self.log_service_output(&prefix_str, Some(Arc::clone(&logger)), &mut child)
                     .await;
             }
             _ => {}
@@ -219,7 +239,7 @@ impl ProcessManager {
 
     async fn log_service_output(
         &self,
-        prefix: &String,
+        prefix: &str,
         logger: Option<Arc<Mutex<RotatingFileLogger>>>,
         child: &mut std::process::Child,
     ) {

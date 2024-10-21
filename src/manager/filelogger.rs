@@ -1,4 +1,3 @@
-use std::fs::metadata;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -6,7 +5,6 @@ use chrono::Local;
 use regex::Regex;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::futures;
 
 pub struct RotatingFileLogger {
     file_path: PathBuf,
@@ -113,15 +111,19 @@ impl RotatingFileLogger {
     }
 
     async fn enforce_max_rotated_files(&self) -> Result<()> {
+        info!("Running enforce_max_rot_files function...");
         let dir = self
             .file_path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Failed to get log file directory"))?;
 
+        info!("using dir: {:#?}", dir);
+
         let mut entries = tokio::fs::read_dir(dir).await?;
         let mut rotated_files = Vec::new();
 
         while let Some(entry) = entries.next_entry().await? {
+            info!("Entries in dir: {:#?}", entries);
             let path = entry.path();
             if path.is_file() {
                 if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
@@ -140,6 +142,7 @@ impl RotatingFileLogger {
         }
         // Sort by creation time
         rotated_files.sort_by_key(|(_, modtime)| *modtime);
+        info!("rotated files after sroting {:#?}", rotated_files);
 
         // If there are more than max_rotated_files, delete the oldest ones
         if rotated_files.len() > self.max_rotated_files {

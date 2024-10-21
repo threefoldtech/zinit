@@ -506,7 +506,7 @@ impl ZInit {
             config::Log::None => Log::None,
             config::Log::Stdout => Log::Stdout,
             config::Log::Ring => Log::Ring(format!("{}/test", name.as_ref())),
-            config::Log::File => Log::File(format!("{}_test", name.as_ref())),
+            config::Log::File => Log::File(format!("{}_test", name.as_ref()).into()),
         };
 
         let test = self
@@ -599,7 +599,7 @@ impl ZInit {
                 config::Log::Ring => Log::Ring(name.clone()),
                 config::Log::File => {
                     if let Some(log_file) = &config.log_file {
-                        Log::File(log_file.clone())
+                        Log::File(log_file.clone().into())
                     } else {
                         error!("log_file is not specified for service '{}'", name);
                         Log::None
