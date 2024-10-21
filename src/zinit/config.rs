@@ -69,6 +69,9 @@ impl Service {
             if self.log_file.is_none() {
                 bail!("log_file must be specified when log is set to 'file'");
             }
+            if !(self.log_file.clone().unwrap().ends_with(".txt")) {
+                bail!("log_file must have .txt extension");
+            }
         }
 
         Signal::from_str(&self.signal.stop.to_uppercase())?;

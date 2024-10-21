@@ -23,7 +23,7 @@ mod buffer;
 mod filelogger;
 pub use buffer::Logs;
 
-const MAX_LOG_FILE_SIZE: u64 = 1 * 1024 * 1024; // 1 MiB
+const MAX_LOG_FILE_SIZE: u64 = 3 * 1024; //  * 1024; // 1 MiB
 
 pub struct Process {
     cmd: String,
@@ -199,7 +199,7 @@ impl ProcessManager {
             }
             Log::File(log_file_path) => {
                 let logger = Arc::new(Mutex::new(
-                    RotatingFileLogger::new(&log_file_path, MAX_LOG_FILE_SIZE).await?,
+                    RotatingFileLogger::new(log_file_path.clone(), MAX_LOG_FILE_SIZE).await?,
                 ));
                 self.log_service_output(&log_file_path, Some(logger), &mut child)
                     .await;
