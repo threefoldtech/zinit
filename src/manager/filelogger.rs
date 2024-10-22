@@ -6,8 +6,11 @@ use regex::Regex;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 
+const MAX_LOG_FILES: usize = 5;
+const DEFAULT_LOG_DIR: &str = "/var/log/";
+
 pub struct RotatingFileLogger {
-    file_path: PathBuf,
+    log_file_path: PathBuf,
     size_threshold: u64,
     current_size: u64,
     file: File,
@@ -16,45 +19,67 @@ pub struct RotatingFileLogger {
 }
 
 impl RotatingFileLogger {
-    pub async fn new<P>(file_path: P, size_threshold: u64) -> Result<Self>
+    pub async fn new<P>(log_file_name: P, size_threshold: u64) -> Result<Self>
     where
         P: Into<PathBuf>,
     {
-        let file_path = file_path.into();
+        let file_path: PathBuf = log_file_name.into();
+
+        // Check if file
+        if !file_path.is_file() {
+            return Err(anyhow!("The provided path does not point to a valid file"));
+        }
+
+        // Check if correct .txt extension
+        if let Some(ext) = file_path.extension() {
+            if ext == "txt" {
+                return Err(anyhow!("Log file must have .txt extension"));
+            }
+        }
+
+        // Log file should not be directory
+        if file_path.parent().is_some() {
+            return Err(anyhow!(
+                "The path should not contain any directories, only a filename"
+            ));
+        }
+
+        let mut log_file_path = PathBuf::new();
+        log_file_path.push(DEFAULT_LOG_DIR);
+        log_file_path.push(file_path.clone());
 
         // Open or create the log file
         let file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&file_path)
+            .open(&log_file_path)
             .await
-            .with_context(|| format!("Failed to open log file: {:?}", file_path))?;
+            .with_context(|| format!("Failed to open log file: {:?}", log_file_path))?;
 
-        // Get curretn file size
+        // Get current file size
         let metadata = file.metadata().await?;
         let current_size = metadata.len();
 
         // Compile regex to match rotated log files
         // Example: log_20230826_123456.txt
-        let base_name = file_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .trim_end_matches(".txt");
-
-        let pattern = format!(r"^{}_\d{{8}}_\d{{6}}\.txt$", regex::escape(base_name));
-        info!("pattern: {:?}", pattern);
-
-        let rotated_file_pattern = Regex::new(&pattern)
-            .with_context(|| format!("Failed to compile regex pattern: {}", pattern))?;
+        let rotated_file_pattern = if let Some(base_name) = log_file_path.file_name() {
+            let pattern = format!(
+                r"^{}_\d{{8}}_\d{{6}}\.txt$",
+                regex::escape(base_name.to_str().unwrap().trim_end_matches(".txt"))
+            );
+            info!("pattern: {:?}", pattern);
+            Regex::new(&pattern)?
+        } else {
+            return Err(anyhow!("Failed to compile regex pattern"));
+        };
 
         Ok(RotatingFileLogger {
-            file_path,
+            log_file_path,
             size_threshold,
             current_size,
             file,
             rotated_file_pattern,
-            max_rotated_files: 5,
+            max_rotated_files: MAX_LOG_FILES,
         })
     }
 
@@ -80,17 +105,18 @@ impl RotatingFileLogger {
         let now = Local::now();
         let datetime_str = now.format("%Y%m%d_%H%M%S").to_string();
         let base_stem = self
-            .file_path
+            .log_file_path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .trim_end_matches(".txt");
+            .unwrap_or("");
+
+        info!("ROTATE FUNCTION, BASE stem: {:#?}", base_stem);
 
         let rotated_file_name = format!("{}_{}.txt", base_stem, datetime_str);
-        let rotated_file_path = self.file_path.with_file_name(rotated_file_name);
+        let rotated_file_path = self.log_file_path.with_file_name(rotated_file_name);
 
         // Rename the current file to teh rotated filename
-        tokio::fs::rename(&self.file_path, &rotated_file_path)
+        tokio::fs::rename(&self.log_file_path, &rotated_file_path)
             .await
             .with_context(|| format!("Failed to rename log file to {:?}", rotated_file_path))?;
 
@@ -98,9 +124,9 @@ impl RotatingFileLogger {
         self.file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.file_path)
+            .open(&self.log_file_path)
             .await
-            .with_context(|| format!("Failed to open new log file: {:?}", self.file_path))?;
+            .with_context(|| format!("Failed to open new log file: {:?}", self.log_file_path))?;
 
         self.current_size = 0;
 
@@ -112,8 +138,14 @@ impl RotatingFileLogger {
 
     async fn enforce_max_rotated_files(&self) -> Result<()> {
         info!("Running enforce_max_rot_files function...");
+        info!("current log_file_path using: {:#?}", self.log_file_path);
+        info!(
+            "current log_file_path paretn: {:#?}",
+            self.log_file_path.parent()
+        );
+
         let dir = self
-            .file_path
+            .log_file_path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Failed to get log file directory"))?;
 

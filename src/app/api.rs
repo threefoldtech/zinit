@@ -156,11 +156,18 @@ impl Api {
         Ok(encoder::to_value(map)?)
     }
 
-    async fn monitor<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
-            .context("failed to load service config")?;
-        zinit.monitor(name, service).await?;
-        Ok(Value::Null)
+    async fn monitor<S: AsRef<str>>(service_name: S, zinit: ZInit) -> Result<Value> {
+        match config::load(format!("{}.yaml", service_name.as_ref())) {
+            Ok((name, service)) => {
+                zinit.monitor(name, service).await?;
+                Ok(Value::Null)
+            }
+            Err(e) => bail!(
+                "Failed to load service config for '{}': {}",
+                service_name.as_ref(),
+                e
+            ),
+        }
     }
 
     async fn forget<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
