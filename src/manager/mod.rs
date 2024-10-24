@@ -24,7 +24,7 @@ mod buffer;
 mod filelogger;
 pub use buffer::Logs;
 
-const MAX_LOG_FILE_SIZE: u64 = 3 * 1024; //  * 1024; // 1 MiB
+const MAX_LOG_FILE_SIZE: u64 = 1024 * 1024; // 1 MiB
 
 pub struct Process {
     cmd: String,
