@@ -506,6 +506,7 @@ impl ZInit {
             config::Log::None => Log::None,
             config::Log::Stdout => Log::Stdout,
             config::Log::Ring => Log::Ring(format!("{}/test", name.as_ref())),
+            config::Log::File => Log::File(format!("{}_test", name.as_ref()).into()),
         };
 
         let test = self
@@ -513,6 +514,7 @@ impl ZInit {
             .run(
                 Process::new(&cfg.test, &cfg.dir, Some(cfg.env.clone())),
                 log.clone(),
+                name.as_ref(),
             )
             .await?;
 
@@ -596,6 +598,14 @@ impl ZInit {
                 config::Log::None => Log::None,
                 config::Log::Stdout => Log::Stdout,
                 config::Log::Ring => Log::Ring(name.clone()),
+                config::Log::File => {
+                    if let Some(log_file) = &config.log_file {
+                        Log::File(log_file.clone().into())
+                    } else {
+                        error!("log_file is not specified for service '{}'", name);
+                        Log::None
+                    }
+                }
             };
 
             let mut service = input.write().await;
@@ -614,6 +624,7 @@ impl ZInit {
                 .run(
                     Process::new(&config.exec, &config.dir, Some(config.env.clone())),
                     log.clone(),
+                    &name,
                 )
                 .await;
 

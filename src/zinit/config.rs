@@ -30,6 +30,7 @@ pub enum Log {
     #[default]
     Ring,
     Stdout,
+    File,
 }
 
 fn default_shutdown_timeout_fn() -> u64 {
@@ -50,6 +51,7 @@ pub struct Service {
     pub after: Vec<String>,
     pub signal: Signal,
     pub log: Log,
+    pub log_file: Option<String>,
     pub env: HashMap<String, String>,
     pub dir: String,
 }
@@ -60,6 +62,16 @@ impl Service {
         use std::str::FromStr;
         if self.exec.is_empty() {
             bail!("missing exec directive");
+        }
+
+        // Validate `log_file` when `log` is `File`
+        if let Log::File = self.log {
+            if self.log_file.is_none() {
+                bail!("log_file must be specified when log is set to 'file'");
+            }
+            if !(self.log_file.clone().unwrap().ends_with(".txt")) {
+                bail!("log_file must have .txt extension");
+            }
         }
 
         Signal::from_str(&self.signal.stop.to_uppercase())?;
