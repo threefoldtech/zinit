@@ -7,7 +7,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 
 const MAX_LOG_FILES: usize = 5;
-const DEFAULT_LOG_DIR: &str = "/var/log/";
+const DEFAULT_LOG_DIR: &str = "/var/log/zinit";
 
 pub struct RotatingFileLogger {
     log_file_path: PathBuf,
@@ -19,34 +19,40 @@ pub struct RotatingFileLogger {
 }
 
 impl RotatingFileLogger {
-    pub async fn new<P>(log_file_name: P, size_threshold: u64) -> Result<Self>
+    pub async fn new<P>(service_name: &str, log_file_name: P, size_threshold: u64) -> Result<Self>
     where
         P: Into<PathBuf>,
     {
         let file_path: PathBuf = log_file_name.into();
 
-        // Check if file
-        if !file_path.is_file() {
-            return Err(anyhow!("The provided path does not point to a valid file"));
-        }
-
         // Check if correct .txt extension
         if let Some(ext) = file_path.extension() {
-            if ext == "txt" {
-                return Err(anyhow!("Log file must have .txt extension"));
+            if ext != "txt" {
+                bail!("Log file must have .txt extension");
             }
         }
 
-        // Log file should not be directory
-        if file_path.parent().is_some() {
-            return Err(anyhow!(
-                "The path should not contain any directories, only a filename"
-            ));
+        // Log file will be saved under `/var/log/zinit/<service_name>/<log_file_name>`
+        let mut log_file_path = PathBuf::new();
+        log_file_path.push(format!("{}/{}", DEFAULT_LOG_DIR, service_name));
+        log_file_path.push(file_path.clone());
+        debug!(
+            "Creating log file for {} at {}",
+            service_name,
+            log_file_path.to_string_lossy()
+        );
+
+        // Create the directory if it doesn't exist
+        if let Some(parent) = log_file_path.parent() {
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!("Failed to create directories for log file: {:?}", parent)
+            })?;
         }
 
-        let mut log_file_path = PathBuf::new();
-        log_file_path.push(DEFAULT_LOG_DIR);
-        log_file_path.push(file_path.clone());
+        // Bail if there is already a log file with the same name
+        if tokio::fs::metadata(&log_file_path).await.is_ok() {
+            bail!("Another log file with the same name already exists; change the log file name");
+        }
 
         // Open or create the log file
         let file = OpenOptions::new()
@@ -67,7 +73,6 @@ impl RotatingFileLogger {
                 r"^{}_\d{{8}}_\d{{6}}\.txt$",
                 regex::escape(base_name.to_str().unwrap().trim_end_matches(".txt"))
             );
-            info!("pattern: {:?}", pattern);
             Regex::new(&pattern)?
         } else {
             return Err(anyhow!("Failed to compile regex pattern"));
@@ -109,9 +114,6 @@ impl RotatingFileLogger {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-
-        info!("ROTATE FUNCTION, BASE stem: {:#?}", base_stem);
-
         let rotated_file_name = format!("{}_{}.txt", base_stem, datetime_str);
         let rotated_file_path = self.log_file_path.with_file_name(rotated_file_name);
 
@@ -128,6 +130,7 @@ impl RotatingFileLogger {
             .await
             .with_context(|| format!("Failed to open new log file: {:?}", self.log_file_path))?;
 
+        // After rotating, reset current size 0
         self.current_size = 0;
 
         // Enforce the maximum number of rotated files
@@ -137,31 +140,20 @@ impl RotatingFileLogger {
     }
 
     async fn enforce_max_rotated_files(&self) -> Result<()> {
-        info!("Running enforce_max_rot_files function...");
-        info!("current log_file_path using: {:#?}", self.log_file_path);
-        info!(
-            "current log_file_path paretn: {:#?}",
-            self.log_file_path.parent()
-        );
-
         let dir = self
             .log_file_path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Failed to get log file directory"))?;
 
-        info!("using dir: {:#?}", dir);
-
         let mut entries = tokio::fs::read_dir(dir).await?;
         let mut rotated_files = Vec::new();
 
+        // Find the rotated files based on the log file name
         while let Some(entry) = entries.next_entry().await? {
-            info!("Entries in dir: {:#?}", entries);
             let path = entry.path();
             if path.is_file() {
                 if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                    info!("Found related logfile: {:?}", filename);
                     if self.rotated_file_pattern.is_match(filename) {
-                        info!("...and matched the pattern");
                         // retrieve modification time
                         if let Ok(metadata) = tokio::fs::metadata(&path).await {
                             if let Ok(modified) = metadata.modified() {
@@ -172,9 +164,9 @@ impl RotatingFileLogger {
                 }
             }
         }
+
         // Sort by creation time
         rotated_files.sort_by_key(|(_, modtime)| *modtime);
-        info!("rotated files after sroting {:#?}", rotated_files);
 
         // If there are more than max_rotated_files, delete the oldest ones
         if rotated_files.len() > self.max_rotated_files {
@@ -183,7 +175,6 @@ impl RotatingFileLogger {
                 tokio::fs::remove_file(file).await.with_context(|| {
                     format!("Failed to delete old rotated log file: {:?}", file)
                 })?;
-                info!("removed file: {:?}", file);
             }
         }
 

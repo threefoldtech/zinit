@@ -9,10 +9,10 @@ use nix::unistd::Pid;
 use std::fs::File as StdFile;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::IntoRawFd;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -167,7 +167,7 @@ impl ProcessManager {
         Ok(signal::killpg(pid, sig)?)
     }
 
-    pub async fn run(&self, cmd: Process, log: Log) -> Result<Child> {
+    pub async fn run(&self, cmd: Process, log: Log, service_name: &str) -> Result<Child> {
         let args = shlex::split(&cmd.cmd).context("failed to parse command")?;
         if args.is_empty() {
             bail!("invalid command");
@@ -207,11 +207,15 @@ impl ProcessManager {
                 let logger = if let Some(existing_logger) = loggers.get(log_file_path) {
                     Arc::clone(existing_logger)
                 } else {
-                    let new_logger = Arc::new(Mutex::new(RotatingFileLogger::new(
-                        log_file_path.clone(),
-                        MAX_LOG_FILE_SIZE,
-                    ).await?));
-                    
+                    let new_logger = Arc::new(Mutex::new(
+                        RotatingFileLogger::new(
+                            service_name,
+                            log_file_path.clone(),
+                            MAX_LOG_FILE_SIZE,
+                        )
+                        .await?,
+                    ));
+
                     loggers.insert(log_file_path.clone(), Arc::clone(&new_logger));
 
                     new_logger

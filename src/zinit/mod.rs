@@ -514,6 +514,7 @@ impl ZInit {
             .run(
                 Process::new(&cfg.test, &cfg.dir, Some(cfg.env.clone())),
                 log.clone(),
+                name.as_ref(),
             )
             .await?;
 
@@ -623,6 +624,7 @@ impl ZInit {
                 .run(
                     Process::new(&config.exec, &config.dir, Some(config.env.clone())),
                     log.clone(),
+                    &name,
                 )
                 .await;
 
