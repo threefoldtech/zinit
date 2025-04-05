@@ -1,20 +1,71 @@
-# zinit [![Rust](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml/badge.svg)](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml)
-A POC PID 1 replacement that feels like runit written in rust+tokio
+# Zinit [![Rust](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml/badge.svg)](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml)
 
-## Goal
-A PID replacement that is very lightweight and provide the following requirements
-- Make sure that configured services are up and running at all times
-- Support service dependencies during the boot process
-- Provide a simple command line interface to add, start, stop and reload services
+A lightweight PID 1 replacement inspired by runit, written in Rust using Tokio for async I/O.
 
-# Usage
-please check docs [here](docs)
+## Overview
 
-## Test docker image
-To play with zinit, we have a testing docker image you can build easily by typing `make docker`.
-The test image currently auto starts redis and open-sshd, it doesn't create key or change passwords (please check [Dockerfile](Dockerfile)).
+Zinit is a service manager designed to be simple, lightweight, and reliable for both system services and container environments. It acts as an init system (PID 1) but focuses only on essential service management functionality.
 
-## Local build notes
-- To build locally you can use `make` 
-- Build requires `rust` and `musl`, `musl-tools` installed
-- Preferred to build with rust version `cargo 1.46.0 (149022b1d 2020-07-17)`
+### Key Features
+
+- **Service Management**: Ensures configured services are up and running at all times
+- **Dependency Handling**: Supports service dependencies for proper startup ordering
+- **Simple Control Interface**: Provides an intuitive CLI to add, start, stop, and monitor services
+- **Container Support**: Can run in container mode with appropriate signal handling
+- **Configurable Logging**: Multiple logging options including ringbuffer and stdout
+
+## Documentation
+
+Comprehensive documentation is available in the [docs](docs) directory:
+
+- [Command Line Interface](docs/readme.md)
+- [Implementation Details](docs/implementation.md)
+- [API Protocol](docs/protocol.md)
+
+## Quick Start
+
+### Installation
+
+```bash
+# Build from source
+make
+
+# Install the binary
+sudo cp target/x86_64-unknown-linux-musl/release/zinit /usr/local/bin/
+```
+
+### Testing with Docker
+
+To quickly try zinit in a container environment:
+
+```bash
+# Build the test docker image
+make docker
+
+# Run the container
+docker run -dt --device=/dev/kmsg:/dev/kmsg:rw zinit
+```
+
+The test image automatically starts Redis and OpenSSH services.
+
+## Building from Source
+
+### Requirements
+
+- Rust (cargo) - version 1.46.0 or later
+- musl and musl-tools packages
+- GNU Make
+
+### Build Instructions
+
+```bash
+# Standard build
+make
+
+# For development/debug
+make dev
+```
+
+## License
+
+See [LICENSE](LICENSE) file for details.
