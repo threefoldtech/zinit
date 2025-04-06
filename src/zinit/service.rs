@@ -1,5 +1,4 @@
 use crate::zinit::config;
-use crate::zinit::errors::ZInitError;
 use crate::zinit::state::{State, Target};
 use crate::zinit::types::Watched;
 use anyhow::{Context, Result};

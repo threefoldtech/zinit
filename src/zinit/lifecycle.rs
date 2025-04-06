@@ -16,7 +16,7 @@ impl WaitStatusExt for WaitStatus {
         matches!(self, WaitStatus::Exited(_, 0))
     }
 }
-use anyhow::{Context, Result};
+use anyhow::Result;
 use nix::sys::reboot::RebootMode;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;

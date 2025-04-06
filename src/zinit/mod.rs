@@ -7,16 +7,12 @@ pub mod state;
 pub mod types;
 
 // Re-export commonly used items
-pub use config::{Service as ServiceConfig, Services, DEFAULT_SHUTDOWN_TIMEOUT};
-pub use errors::ZInitError;
-pub use service::{ZInitService, ZInitStatus};
-pub use state::{State, Target};
-pub use types::WaitStatusExt;
+pub use service::ZInitStatus;
+pub use state::State;
 
 use crate::manager::{Logs, ProcessManager};
 use anyhow::Result;
 use nix::sys::signal;
-use nix::unistd::Pid;
 use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
 
