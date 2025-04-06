@@ -1,4 +1,4 @@
-use crate::zinit::Table;
+use crate::zinit::types::ServiceTable;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -9,7 +9,7 @@ pub struct ProcessDAG {
     /// number of services including the dummy root
     pub count: u32,
 }
-pub async fn service_dependency_order(services: Arc<RwLock<Table>>) -> ProcessDAG {
+pub async fn service_dependency_order(services: Arc<RwLock<ServiceTable>>) -> ProcessDAG {
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
     let mut indegree: HashMap<String, u32> = HashMap::new();
     let table = services.read().await;
@@ -25,7 +25,7 @@ pub async fn service_dependency_order(services: Arc<RwLock<Table>>) -> ProcessDA
     }
     let mut heads: Vec<String> = Vec::new();
     for (name, _) in table.iter() {
-        if *indegree.get(name).unwrap_or(&0) == 0 {
+        if *indegree.get::<str>(name).unwrap_or(&0) == 0 {
             heads.push(name.into());
             // add edges from the dummy root to the heads
             *indegree.entry(name.into()).or_insert(0) += 1;
