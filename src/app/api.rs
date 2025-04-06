@@ -32,6 +32,8 @@ pub struct Status {
     pub state: String,
     pub target: String,
     pub after: HashMap<String, String>,
+    pub memory_kb: u64,
+    pub cpu_percent: f64,
 }
 
 pub struct Api {
@@ -224,6 +226,8 @@ impl Api {
                 }
                 after
             },
+            memory_kb: status.memory_kb,
+            cpu_percent: status.cpu_percent,
         };
 
         Ok(encoder::to_value(result)?)
