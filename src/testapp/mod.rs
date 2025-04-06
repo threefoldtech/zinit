@@ -1,9 +1,9 @@
 use anyhow::Result;
+use std::env;
 use std::path::Path;
+use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
-use std::process::Stdio;
-use std::env;
 
 pub async fn start_zinit(socket_path: &str, config_dir: &str) -> Result<()> {
     // Create a temporary config directory if it doesn't exist
@@ -27,12 +27,12 @@ pub async fn start_zinit(socket_path: &str, config_dir: &str) -> Result<()> {
         .stderr(Stdio::piped());
 
     let child = cmd.spawn()?;
-    
+
     // Give zinit some time to start up
     sleep(Duration::from_secs(1)).await;
-    
+
     println!("Zinit started with PID: {:?}", child.id());
-    
+
     Ok(())
 }
 
