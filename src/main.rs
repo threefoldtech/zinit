@@ -1,16 +1,10 @@
-extern crate serde;
-#[macro_use]
-extern crate anyhow;
-#[macro_use]
-extern crate log;
-extern crate tokio;
+extern crate zinit;
+
 use anyhow::Result;
 use clap::{App, Arg, SubCommand};
 use git_version::git_version;
 
-mod app;
-mod manager;
-mod zinit;
+use zinit::app;
 
 const GIT_VERSION: &str = git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 

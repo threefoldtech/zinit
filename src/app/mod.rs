@@ -1,4 +1,4 @@
-mod api;
+pub mod api;
 
 use crate::zinit;
 use anyhow::{Context, Result};
