@@ -10,6 +10,56 @@ use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
 use tokio::net::{UnixListener, UnixStream};
 
+// JSON-RPC 2.0 structures
+#[derive(Debug, Deserialize, Serialize)]
+struct JsonRpcRequest {
+    jsonrpc: String,
+    id: Option<Value>,
+    method: String,
+    params: Option<Value>,
+}
+
+// Type alias for batch requests
+type JsonRpcBatchRequest = Vec<JsonRpcRequest>;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct JsonRpcResponse {
+    jsonrpc: String,
+    id: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonRpcError>,
+}
+
+// Type alias for batch responses
+type JsonRpcBatchResponse = Vec<JsonRpcResponse>;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+}
+
+// JSON-RPC error codes
+// Standard JSON-RPC error codes
+const PARSE_ERROR: i32 = -32700;
+const INVALID_REQUEST: i32 = -32600;
+const METHOD_NOT_FOUND: i32 = -32601;
+const INVALID_PARAMS: i32 = -32602;
+const INTERNAL_ERROR: i32 = -32603;
+
+// Custom error codes for Zinit
+const SERVICE_NOT_FOUND: i32 = -32000;
+const SERVICE_ALREADY_MONITORED: i32 = -32001;
+const SERVICE_IS_UP: i32 = -32002;
+const SERVICE_IS_DOWN: i32 = -32003;
+const INVALID_SIGNAL: i32 = -32004;
+const CONFIG_ERROR: i32 = -32005;
+const SHUTTING_DOWN: i32 = -32006;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 struct Response {
@@ -56,41 +106,358 @@ impl Api {
         }
     }
 
+    // Process a JSON-RPC request and return a JSON-RPC response
+    async fn process_jsonrpc(request: JsonRpcRequest, zinit: ZInit) -> JsonRpcResponse {
+        let id = request.id.unwrap_or(Value::Null);
+
+        // Process the request based on the method
+        let result = match request.method.as_str() {
+            // Service management methods
+            "service.list" => Self::list(zinit).await,
+
+            "service.status" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::status(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            },
+
+            "service.start" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::start(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            },
+
+            "service.stop" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::stop(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            },
+
+            "service.monitor" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::monitor(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            },
+
+            "service.forget" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::forget(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            },
+
+            "service.kill" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        if let Some(signal) = params.get("signal").and_then(|v| v.as_str()) {
+                            Self::kill(name, signal, zinit).await
+                        } else {
+                            Err(anyhow::anyhow!("Missing or invalid 'signal' parameter"))
+                        }
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            },
+
+            // System operations
+            "system.shutdown" => Self::shutdown(zinit).await,
+            "system.reboot" => Self::reboot(zinit).await,
+
+            // Unknown method
+            _ => Err(anyhow::anyhow!("Method not found: {}", request.method)),
+        };
+
+        // Create the response
+        match result {
+            Ok(value) => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: Some(value),
+                error: None,
+            },
+            Err(err) => {
+                // Map error messages to specific error codes
+                let code = if err.to_string().contains("Method not found") {
+                    METHOD_NOT_FOUND
+                } else if err.to_string().contains("Missing or invalid") {
+                    INVALID_PARAMS
+                } else if err.to_string().contains("service name") && err.to_string().contains("unknown") {
+                    SERVICE_NOT_FOUND
+                } else if err.to_string().contains("already monitored") {
+                    SERVICE_ALREADY_MONITORED
+                } else if err.to_string().contains("service") && err.to_string().contains("is up") {
+                    SERVICE_IS_UP
+                } else if err.to_string().contains("service") && err.to_string().contains("is down") {
+                    SERVICE_IS_DOWN
+                } else if err.to_string().contains("signal") {
+                    INVALID_SIGNAL
+                } else if err.to_string().contains("config") {
+                    CONFIG_ERROR
+                } else if err.to_string().contains("shutting down") {
+                    SHUTTING_DOWN
+                } else {
+                    INTERNAL_ERROR
+                };
+
+                JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code,
+                        message: err.to_string(),
+                        data: None,
+                    }),
+                }
+            },
+        }
+    }
+
     async fn handle(stream: UnixStream, zinit: ZInit) {
         let mut stream = BufStream::new(stream);
-        let mut cmd = String::new();
-        if let Err(err) = stream.read_line(&mut cmd).await {
-            error!("failed to read command: {}", err);
-            let _ = stream.write_all("bad request".as_ref()).await;
-        };
-
-        let response = match Self::process(cmd, &mut stream, zinit).await {
-            // When process returns None means we can terminate without
-            // writing any result to the socket.
-            Ok(None) => return,
-            Ok(Some(body)) => Response {
-                body,
-                state: State::Ok,
+        
+        // First, try to read as a JSON-RPC request
+        let mut buffer = Vec::new();
+        
+        // Read a small amount first to check if it's JSON
+        let mut peek_buffer = [0u8; 1];
+        match stream.read_exact(&mut peek_buffer).await {
+            Ok(_) => {
+                // Put the peeked byte back into the buffer
+                buffer.push(peek_buffer[0]);
+                
+                // If it starts with '{', it's likely JSON-RPC
+                if peek_buffer[0] == b'{' || peek_buffer[0] == b'[' {
+                    // Read the rest of the request
+                    if let Err(err) = stream.read_to_end(&mut buffer).await {
+                        error!("failed to read request: {}", err);
+                        let _ = stream.write_all("bad request".as_ref()).await;
+                        return;
+                    }
+                    
+                    // First, try to parse as a batch request
+                    let batch_request: Result<JsonRpcBatchRequest, _> = encoder::from_slice(&buffer);
+                    
+                    match batch_request {
+                        Ok(requests) if !requests.is_empty() => {
+                            // Valid batch request
+                            let mut responses = Vec::with_capacity(requests.len());
+                            
+                            for req in requests {
+                                let response = if req.jsonrpc != "2.0" {
+                                    // Invalid JSON-RPC version
+                                    JsonRpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: req.id.unwrap_or(Value::Null),
+                                        result: None,
+                                        error: Some(JsonRpcError {
+                                            code: INVALID_REQUEST,
+                                            message: "Invalid JSON-RPC version, expected 2.0".to_string(),
+                                            data: None,
+                                        }),
+                                    }
+                                } else {
+                                    // Process the request
+                                    Self::process_jsonrpc(req, zinit.clone()).await
+                                };
+                                
+                                responses.push(response);
+                            }
+                            
+                            // Serialize and send the batch response
+                            let value = match encoder::to_vec(&responses) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    error!("failed to serialize batch response: {}", err);
+                                    return;
+                                }
+                            };
+                            
+                            if let Err(err) = stream.write_all(&value).await {
+                                error!("failed to send batch response to client: {}", err);
+                            };
+                            
+                            // Add a newline character to indicate the end of the response
+                            if let Err(err) = stream.write_all(b"\n").await {
+                                error!("failed to send newline: {}", err);
+                            };
+                            
+                            let _ = stream.flush().await;
+                            return;
+                        },
+                        Ok(_) => {
+                            // Empty batch, return error
+                            let response = JsonRpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: Value::Null,
+                                result: None,
+                                error: Some(JsonRpcError {
+                                    code: INVALID_REQUEST,
+                                    message: "Invalid Request: Empty batch".to_string(),
+                                    data: None,
+                                }),
+                            };
+                            
+                            let value = match encoder::to_vec(&response) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    error!("failed to serialize response: {}", err);
+                                    return;
+                                }
+                            };
+                            
+                            if let Err(err) = stream.write_all(&value).await {
+                                error!("failed to send response to client: {}", err);
+                            };
+                            
+                            // Add a newline character to indicate the end of the response
+                            if let Err(err) = stream.write_all(b"\n").await {
+                                error!("failed to send newline: {}", err);
+                            };
+                            
+                            let _ = stream.flush().await;
+                            return;
+                        },
+                        Err(_) => {
+                            // Not a batch request, try as a single request
+                            let request: Result<JsonRpcRequest, _> = encoder::from_slice(&buffer);
+                            
+                            match request {
+                                Ok(req) => {
+                                    // Valid JSON-RPC request
+                                    let response = if req.jsonrpc != "2.0" {
+                                        // Invalid JSON-RPC version
+                                        JsonRpcResponse {
+                                            jsonrpc: "2.0".to_string(),
+                                            id: req.id.unwrap_or(Value::Null),
+                                            result: None,
+                                            error: Some(JsonRpcError {
+                                                code: INVALID_REQUEST,
+                                                message: "Invalid JSON-RPC version, expected 2.0".to_string(),
+                                                data: None,
+                                            }),
+                                        }
+                                    } else {
+                                        // Process the request
+                                        Self::process_jsonrpc(req, zinit).await
+                                    };
+                                    
+                                    // Serialize and send the response
+                                    let value = match encoder::to_vec(&response) {
+                                        Ok(value) => value,
+                                        Err(err) => {
+                                            error!("failed to serialize response: {}", err);
+                                            return;
+                                        }
+                                    };
+                                    
+                                    if let Err(err) = stream.write_all(&value).await {
+                                        error!("failed to send response to client: {}", err);
+                                    };
+                                    
+                                    // Add a newline character to indicate the end of the response
+                                    if let Err(err) = stream.write_all(b"\n").await {
+                                        error!("failed to send newline: {}", err);
+                                    };
+                                    
+                                    let _ = stream.flush().await;
+                                    return;
+                                },
+                                Err(_) => {
+                                    // Not a valid JSON-RPC request, try the line-based protocol
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // If we get here, it's not a JSON-RPC request
+                // Try the line-based protocol
+                let mut cmd = String::from_utf8_lossy(&buffer).to_string();
+                
+                // Read the rest of the line
+                let mut line = String::new();
+                if let Err(err) = stream.read_line(&mut line).await {
+                    error!("failed to read command: {}", err);
+                    let _ = stream.write_all("bad request".as_ref()).await;
+                    return;
+                }
+                
+                // Combine the peeked byte with the rest of the line
+                cmd.push_str(&line);
+                
+                // Process using the old line-based protocol
+                let response = match Self::process(cmd, &mut stream, zinit).await {
+                    // When process returns None means we can terminate without
+                    // writing any result to the socket.
+                    Ok(None) => return,
+                    Ok(Some(body)) => Response {
+                        body,
+                        state: State::Ok,
+                    },
+                    Err(err) => Response {
+                        state: State::Error,
+                        body: encoder::to_value(format!("{}", err)).unwrap(),
+                    },
+                };
+                
+                let value = match encoder::to_vec(&response) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        debug!("failed to create response: {}", err);
+                        return;
+                    }
+                };
+                
+                if let Err(err) = stream.write_all(&value).await {
+                    error!("failed to send response to client: {}", err);
+                };
+                
+                // Add a newline character to indicate the end of the response
+                if let Err(err) = stream.write_all(b"\n").await {
+                    error!("failed to send newline: {}", err);
+                };
+                
+                let _ = stream.flush().await;
             },
-            Err(err) => Response {
-                state: State::Error,
-                body: encoder::to_value(format!("{}", err)).unwrap(),
-            },
-        };
-
-        let value = match encoder::to_vec(&response) {
-            Ok(value) => value,
             Err(err) => {
-                debug!("failed to create response: {}", err);
+                error!("failed to read request: {}", err);
+                let _ = stream.write_all("bad request".as_ref()).await;
                 return;
             }
-        };
-
-        if let Err(err) = stream.write_all(&value).await {
-            error!("failed to send response to client: {}", err);
-        };
-
-        let _ = stream.flush().await;
+        }
     }
 
     async fn process(
@@ -250,6 +617,42 @@ impl Client {
         })
     }
 
+    // Send a JSON-RPC request and return the result
+    async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::Number(serde_json::Number::from(1))),
+            method: method.to_string(),
+            params,
+        };
+
+        let mut con = BufStream::new(self.connect().await?);
+
+        // Serialize and send the request
+        let request_bytes = encoder::to_vec(&request)?;
+        con.write_all(&request_bytes).await?;
+        con.flush().await?;
+
+        // Read and parse the response
+        // Use the same approach as the command method, which is known to work
+        let mut data = String::new();
+        con.read_to_string(&mut data).await?;
+
+        // Parse the JSON-RPC response
+        let response: JsonRpcResponse = encoder::from_str(&data)?;
+
+        // Handle the response
+        if let Some(error) = response.error {
+            bail!("RPC error ({}): {}", error.code, error.message);
+        } else if let Some(result) = response.result {
+            Ok(result)
+        } else {
+            bail!("Invalid JSON-RPC response: missing both result and error");
+        }
+    }
+
+    // Keep the original command method for backward compatibility if needed
+    #[allow(dead_code)]
     async fn command(&self, c: &str) -> Result<Value> {
         let mut con = BufStream::new(self.connect().await?);
 
@@ -277,6 +680,7 @@ impl Client {
         filter: Option<S>,
         follow: bool,
     ) -> Result<()> {
+        // For now, keep using the original log command since it's a special case
         let mut con = self.connect().await?;
         if follow {
             // default behavior of log with no extra arguments
@@ -315,48 +719,72 @@ impl Client {
     }
 
     pub async fn list(&self) -> Result<HashMap<String, String>> {
-        let response = self.command("list").await?;
+        let response = self.jsonrpc_request("service.list", None).await?;
         Ok(encoder::from_value(response)?)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        self.command("shutdown").await?;
+        self.jsonrpc_request("system.shutdown", None).await?;
         Ok(())
     }
 
     pub async fn reboot(&self) -> Result<()> {
-        self.command("reboot").await?;
+        self.jsonrpc_request("system.reboot", None).await?;
         Ok(())
     }
 
     pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<Status> {
-        let response = self.command(&format!("status {}", name.as_ref())).await?;
+        let params = serde_json::json!({
+            "name": name.as_ref()
+        });
+
+        let response = self.jsonrpc_request("service.status", Some(params)).await?;
         Ok(encoder::from_value(response)?)
     }
 
     pub async fn start<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("start {}", name.as_ref())).await?;
+        let params = serde_json::json!({
+            "name": name.as_ref()
+        });
+
+        self.jsonrpc_request("service.start", Some(params)).await?;
         Ok(())
     }
 
     pub async fn stop<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("stop {}", name.as_ref())).await?;
+        let params = serde_json::json!({
+            "name": name.as_ref()
+        });
+
+        self.jsonrpc_request("service.stop", Some(params)).await?;
         Ok(())
     }
 
     pub async fn forget<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("forget {}", name.as_ref())).await?;
+        let params = serde_json::json!({
+            "name": name.as_ref()
+        });
+
+        self.jsonrpc_request("service.forget", Some(params)).await?;
         Ok(())
     }
 
     pub async fn monitor<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("monitor {}", name.as_ref())).await?;
+        let params = serde_json::json!({
+            "name": name.as_ref(),
+        });
+
+        self.jsonrpc_request("service.monitor", Some(params)).await?;
         Ok(())
     }
 
     pub async fn kill<S: AsRef<str>>(&self, name: S, sig: S) -> Result<()> {
-        self.command(&format!("kill {} {}", name.as_ref(), sig.as_ref()))
-            .await?;
+        let params = serde_json::json!({
+            "name": name.as_ref(),
+            "signal": sig.as_ref()
+        });
+
+        self.jsonrpc_request("service.kill", Some(params)).await?;
         Ok(())
     }
 }
