@@ -32,9 +32,6 @@ struct JsonRpcResponse {
     error: Option<JsonRpcError>,
 }
 
-// Type alias for batch responses
-type JsonRpcBatchResponse = Vec<JsonRpcResponse>;
-
 #[derive(Debug, Deserialize, Serialize)]
 struct JsonRpcError {
     code: i32,
@@ -45,7 +42,6 @@ struct JsonRpcError {
 
 // JSON-RPC error codes
 // Standard JSON-RPC error codes
-const PARSE_ERROR: i32 = -32700;
 const INVALID_REQUEST: i32 = -32600;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
