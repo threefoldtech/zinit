@@ -651,14 +651,18 @@ impl Api {
     }
 }
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 pub struct Client {
     socket: PathBuf,
+    next_id: AtomicU64,
 }
 
 impl Client {
     pub fn new<P: AsRef<Path>>(socket: P) -> Client {
         Client {
             socket: socket.as_ref().to_path_buf(),
+            next_id: AtomicU64::new(1),
         }
     }
 
@@ -673,9 +677,12 @@ impl Client {
 
     // Send a JSON-RPC request and return the result
     async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        // Get a unique ID for this request
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: Some(Value::Number(serde_json::Number::from(1))),
+            id: Some(Value::Number(serde_json::Number::from(id))),
             method: method.to_string(),
             params,
         };
