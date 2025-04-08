@@ -260,11 +260,65 @@ impl Api {
                 
                 // If it starts with '{', it's likely JSON-RPC
                 if peek_buffer[0] == b'{' || peek_buffer[0] == b'[' {
-                    // Read the rest of the request
-                    if let Err(err) = stream.read_to_end(&mut buffer).await {
-                        error!("failed to read request: {}", err);
-                        let _ = stream.write_all("bad request".as_ref()).await;
-                        return;
+                    // Read the request until we find a newline or a certain amount of data
+                    // This avoids waiting for EOF which would require the client to close the connection
+                    let mut temp_buf = [0u8; 1024];
+                    loop {
+                        match stream.read(&mut temp_buf).await {
+                            Ok(0) => break, // Connection closed
+                            Ok(n) => {
+                                buffer.extend_from_slice(&temp_buf[..n]);
+                                
+                                // Check if we have a complete JSON object/array
+                                // This is a simple heuristic - we count opening and closing braces/brackets
+                                let mut open_braces = 0;
+                                let mut open_brackets = 0;
+                                let mut in_string = false;
+                                let mut escape_next = false;
+                                
+                                for &b in &buffer {
+                                    if escape_next {
+                                        escape_next = false;
+                                        continue;
+                                    }
+                                    
+                                    match b {
+                                        b'\\' if in_string => escape_next = true,
+                                        b'"' => in_string = !in_string,
+                                        b'{' if !in_string => open_braces += 1,
+                                        b'}' if !in_string => {
+                                            if open_braces > 0 {
+                                                open_braces -= 1;
+                                            }
+                                        },
+                                        b'[' if !in_string => open_brackets += 1,
+                                        b']' if !in_string => {
+                                            if open_brackets > 0 {
+                                                open_brackets -= 1;
+                                            }
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                                
+                                // If all braces/brackets are balanced, we have a complete JSON
+                                if open_braces == 0 && open_brackets == 0 && !in_string {
+                                    break;
+                                }
+                                
+                                // Safety check to prevent buffer from growing too large
+                                if buffer.len() > 1024 * 1024 { // 1MB limit
+                                    error!("request too large");
+                                    let _ = stream.write_all("request too large".as_ref()).await;
+                                    return;
+                                }
+                            },
+                            Err(err) => {
+                                error!("failed to read request: {}", err);
+                                let _ = stream.write_all("bad request".as_ref()).await;
+                                return;
+                            }
+                        }
                     }
                     
                     // First, try to parse as a batch request
@@ -634,9 +688,28 @@ impl Client {
         con.flush().await?;
 
         // Read and parse the response
-        // Use the same approach as the command method, which is known to work
-        let mut data = String::new();
-        con.read_to_string(&mut data).await?;
+        // The server sends a JSON response followed by a newline character
+        // We need to read the entire response until we find the terminating newline
+        let mut buffer = Vec::new();
+        let mut temp_buf = [0u8; 1024];
+        
+        loop {
+            let n = con.read(&mut temp_buf).await?;
+            if n == 0 {
+                break; // Connection closed
+            }
+            
+            buffer.extend_from_slice(&temp_buf[..n]);
+            
+            // Check if the buffer ends with a newline
+            if buffer.ends_with(b"\n") {
+                break;
+            }
+        }
+        
+        // Convert to string and trim the trailing newline
+        let data = String::from_utf8(buffer)?;
+        let data = data.trim_end();
 
         // Parse the JSON-RPC response
         let response: JsonRpcResponse = encoder::from_str(&data)?;
@@ -660,8 +733,26 @@ impl Client {
         let _ = con.write(b"\n").await?;
         con.flush().await?;
 
-        let mut data = String::new();
-        con.read_to_string(&mut data).await?;
+        let mut buffer = Vec::new();
+        let mut temp_buf = [0u8; 1024];
+        
+        loop {
+            let n = con.read(&mut temp_buf).await?;
+            if n == 0 {
+                break; // Connection closed
+            }
+            
+            buffer.extend_from_slice(&temp_buf[..n]);
+            
+            // Check if the buffer ends with a newline
+            if buffer.ends_with(b"\n") {
+                break;
+            }
+        }
+        
+        // Convert to string and trim the trailing newline
+        let data = String::from_utf8(buffer)?;
+        let data = data.trim_end();
 
         let response: Response = encoder::from_str(&data)?;
 
