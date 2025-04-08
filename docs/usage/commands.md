@@ -296,9 +296,11 @@ zinit init --container -c /app/services/
 zinit monitor app
 ```
 
-### Manual Service Control with nc
+### Manual Service Control
 
-Since Zinit uses a simple line protocol, you can interact with it using netcat:
+#### Using Line-Based Protocol with nc
+
+Zinit supports a simple line-based protocol that you can interact with using netcat:
 
 ```bash
 # List services

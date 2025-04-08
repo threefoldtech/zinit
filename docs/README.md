@@ -14,7 +14,9 @@ The documentation is organized into these main sections:
 - **Configuration**: Service file format and examples
 - **Usage**: Command reference and workflows
 - **Architecture**: System design and implementation
-- **API**: Protocol for communicating with Zinit
+- **API**: Protocols for communicating with Zinit
+  - [Line-based Protocol](api/protocol.md)
+  - [JSON-RPC API (OpenRPC)](api/openrpc.md)
 
 ## Key Concepts
 
@@ -63,4 +65,3 @@ For more detailed documentation, start with:
 
 The older documentation is still available:
 - [Legacy Implementation Details](implementation.md)
-- [Legacy Protocol Documentation](protocol.md)

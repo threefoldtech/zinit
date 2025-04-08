@@ -1,0 +1,498 @@
+{
+  "openrpc": "1.2.6",
+  "info": {
+    "version": "1.0.0",
+    "title": "Zinit JSON-RPC API",
+    "description": "JSON-RPC 2.0 API for controlling and querying Zinit services",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "name": "Unix Socket",
+      "url": "unix:///var/run/zinit.sock"
+    }
+  ],
+  "methods": [
+    {
+      "name": "service.list",
+      "description": "Lists all services managed by Zinit",
+      "params": [],
+      "result": {
+        "name": "ServiceList",
+        "description": "A map of service names to their current states",
+        "schema": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Service state (Running, Success, Error, etc.)"
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "List all services",
+          "params": [],
+          "result": {
+            "name": "ServiceListResult",
+            "value": {
+              "service1": "Running",
+              "service2": "Success",
+              "service3": "Error"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "service.status",
+      "description": "Shows detailed status information for a specific service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ServiceStatus",
+        "description": "Detailed status information for the service",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Service name"
+            },
+            "pid": {
+              "type": "integer",
+              "description": "Process ID of the running service (if running)"
+            },
+            "state": {
+              "type": "string",
+              "description": "Current state of the service (Running, Success, Error, etc.)"
+            },
+            "target": {
+              "type": "string",
+              "description": "Target state of the service (Up, Down)"
+            },
+            "after": {
+              "type": "object",
+              "description": "Dependencies of the service and their states",
+              "additionalProperties": {
+                "type": "string",
+                "description": "State of the dependency"
+              }
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "Get status of redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "ServiceStatusResult",
+            "value": {
+              "name": "redis",
+              "pid": 1234,
+              "state": "Running",
+              "target": "Up",
+              "after": {
+                "dependency1": "Success",
+                "dependency2": "Running"
+              }
+            }
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        }
+      ]
+    },
+    {
+      "name": "service.start",
+      "description": "Starts a service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to start",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StartResult",
+        "description": "Result of the start operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Start redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "StartResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        }
+      ]
+    },
+    {
+      "name": "service.stop",
+      "description": "Stops a service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to stop",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StopResult",
+        "description": "Result of the stop operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Stop redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "StopResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32003,
+          "message": "Service is down",
+          "data": "service \"redis\" is down"
+        }
+      ]
+    },
+    {
+      "name": "service.monitor",
+      "description": "Starts monitoring a service. The service configuration is loaded from the config directory.",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to monitor",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "MonitorResult",
+        "description": "Result of the monitor operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Monitor redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "MonitorResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Service already monitored",
+          "data": "service \"redis\" already monitored"
+        },
+        {
+          "code": -32005,
+          "message": "Config error",
+          "data": "failed to load service configuration"
+        }
+      ]
+    },
+    {
+      "name": "service.forget",
+      "description": "Stops monitoring a service. You can only forget a stopped service.",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to forget",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ForgetResult",
+        "description": "Result of the forget operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Forget redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "ForgetResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32002,
+          "message": "Service is up",
+          "data": "service \"redis\" is up"
+        }
+      ]
+    },
+    {
+      "name": "service.kill",
+      "description": "Sends a signal to a running service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to send the signal to",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "signal",
+          "description": "The signal to send (e.g., SIGTERM, SIGKILL)",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KillResult",
+        "description": "Result of the kill operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Send SIGTERM to redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            },
+            {
+              "name": "signal",
+              "value": "SIGTERM"
+            }
+          ],
+          "result": {
+            "name": "KillResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32003,
+          "message": "Service is down",
+          "data": "service \"redis\" is down"
+        },
+        {
+          "code": -32004,
+          "message": "Invalid signal",
+          "data": "invalid signal: INVALID"
+        }
+      ]
+    },
+    {
+      "name": "system.shutdown",
+      "description": "Stops all services and powers off the system",
+      "params": [],
+      "result": {
+        "name": "ShutdownResult",
+        "description": "Result of the shutdown operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Shutdown the system",
+          "params": [],
+          "result": {
+            "name": "ShutdownResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32006,
+          "message": "Shutting down",
+          "data": "system is already shutting down"
+        }
+      ]
+    },
+    {
+      "name": "system.reboot",
+      "description": "Stops all services and reboots the system",
+      "params": [],
+      "result": {
+        "name": "RebootResult",
+        "description": "Result of the reboot operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Reboot the system",
+          "params": [],
+          "result": {
+            "name": "RebootResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32006,
+          "message": "Shutting down",
+          "data": "system is already shutting down"
+        }
+      ]
+    }
+  ],
+  "components": {
+    "contentDescriptors": {},
+    "schemas": {}
+  },
+  "errors": [
+    {
+      "code": -32600,
+      "message": "Invalid Request",
+      "description": "The JSON sent is not a valid Request object"
+    },
+    {
+      "code": -32601,
+      "message": "Method not found",
+      "description": "The method does not exist / is not available"
+    },
+    {
+      "code": -32602,
+      "message": "Invalid params",
+      "description": "Invalid method parameter(s)"
+    },
+    {
+      "code": -32603,
+      "message": "Internal error",
+      "description": "Internal JSON-RPC error"
+    },
+    {
+      "code": -32000,
+      "message": "Service not found",
+      "description": "The requested service does not exist"
+    },
+    {
+      "code": -32001,
+      "message": "Service already monitored",
+      "description": "The service is already being monitored"
+    },
+    {
+      "code": -32002,
+      "message": "Service is up",
+      "description": "The service is currently running"
+    },
+    {
+      "code": -32003,
+      "message": "Service is down",
+      "description": "The service is currently not running"
+    },
+    {
+      "code": -32004,
+      "message": "Invalid signal",
+      "description": "The provided signal is invalid"
+    },
+    {
+      "code": -32005,
+      "message": "Config error",
+      "description": "Error in service configuration"
+    },
+    {
+      "code": -32006,
+      "message": "Shutting down",
+      "description": "The system is shutting down"
+    }
+  ]
+}
