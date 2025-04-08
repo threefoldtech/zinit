@@ -59,16 +59,22 @@ impl ZInitError {
 
     /// Create a new InvalidStateTransition error
     pub fn invalid_state_transition<S: Into<String>>(message: S) -> Self {
-        ZInitError::InvalidStateTransition { message: message.into() }
+        ZInitError::InvalidStateTransition {
+            message: message.into(),
+        }
     }
 
     /// Create a new DependencyError error
     pub fn dependency_error<S: Into<String>>(message: S) -> Self {
-        ZInitError::DependencyError { message: message.into() }
+        ZInitError::DependencyError {
+            message: message.into(),
+        }
     }
 
     /// Create a new ProcessError error
     pub fn process_error<S: Into<String>>(message: S) -> Self {
-        ZInitError::ProcessError { message: message.into() }
+        ZInitError::ProcessError {
+            message: message.into(),
+        }
     }
 }

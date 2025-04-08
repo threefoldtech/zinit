@@ -1,8 +1,8 @@
 use nix::sys::wait::WaitStatus;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::sync::watch;
+use tokio::sync::RwLock;
 use tokio_stream::wrappers::WatchStream;
 
 /// Extension trait for WaitStatus to check if a process exited successfully
