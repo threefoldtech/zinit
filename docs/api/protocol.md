@@ -1,10 +1,12 @@
-# Zinit API Protocol
+# Zinit Line-Based API Protocol
 
-This document describes the wire protocol used to communicate with a running Zinit instance. The protocol allows external applications to control and query Zinit services.
+This document describes the line-based wire protocol used to communicate with a running Zinit instance. The protocol allows external applications to control and query Zinit services.
+
+> **Note:** Zinit also supports a JSON-RPC 2.0 API. For documentation on the JSON-RPC API, see [JSON-RPC API (OpenRPC)](openrpc.md).
 
 ## Protocol Overview
 
-Zinit uses a simple line-based text protocol over a Unix domain socket. The protocol follows a request-response pattern similar to HTTP 1.0:
+Zinit supports a simple line-based text protocol over a Unix domain socket. The protocol follows a request-response pattern similar to HTTP 1.0:
 
 1. Client connects to the Unix socket
 2. Client sends a command (terminated by newline)

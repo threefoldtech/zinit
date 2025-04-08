@@ -40,7 +40,7 @@ impl ZInit {
     pub fn serve(&self) {
         self.lifecycle.process_manager().start();
         if self.lifecycle.is_container_mode() {
-            let lifecycle = self.lifecycle.clone();
+            let lifecycle = self.lifecycle.clone_lifecycle();
             tokio::spawn(async move {
                 use tokio::signal::unix;
 

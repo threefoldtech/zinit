@@ -18,7 +18,7 @@ Zinit is a service manager designed to be simple, lightweight, and reliable for 
 
 Comprehensive documentation is available in the [docs](docs) directory:
 
-- [Command Line Interface](docs/readme.md)
+- [Command Line Interface](docs/README.md)
 - [Implementation Details](docs/implementation.md)
 - [API Protocol](docs/protocol.md)
 
