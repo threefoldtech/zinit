@@ -47,10 +47,7 @@ type Handler = oneshot::Sender<WaitStatus>;
 
 impl Process {
     pub fn new<S: Into<String>>(cmd: S, cwd: S, env: Option<HashMap<String, String>>) -> Process {
-        let env = match env {
-            None => HashMap::new(),
-            Some(env) => env,
-        };
+        let env = env.unwrap_or_default();
 
         Process {
             env,

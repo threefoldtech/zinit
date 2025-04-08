@@ -512,7 +512,6 @@ impl Api {
             Err(err) => {
                 error!("failed to read request: {}", err);
                 let _ = stream.write_all("bad request".as_ref()).await;
-                return;
             }
         }
     }
@@ -722,7 +721,7 @@ impl Client {
         let data = data.trim_end();
 
         // Parse the JSON-RPC response
-        let response: JsonRpcResponse = encoder::from_str(&data)?;
+        let response: JsonRpcResponse = encoder::from_str(data)?;
 
         // Handle the response
         if let Some(error) = response.error {
@@ -764,7 +763,7 @@ impl Client {
         let data = String::from_utf8(buffer)?;
         let data = data.trim_end();
 
-        let response: Response = encoder::from_str(&data)?;
+        let response: Response = encoder::from_str(data)?;
 
         match response.state {
             State::Ok => Ok(response.body),

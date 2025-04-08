@@ -97,7 +97,7 @@ impl LifecycleManager {
         let service = Arc::new(RwLock::new(ZInitService::new(service, State::Unknown)));
         services.insert(name.clone(), Arc::clone(&service));
 
-        let lifecycle = self.clone();
+        let lifecycle = self.clone_lifecycle();
         debug!("service '{}' monitored", name);
         tokio::spawn(lifecycle.watch_service(name, service));
 
@@ -132,7 +132,7 @@ impl LifecycleManager {
             .get(name.as_ref())
             .ok_or_else(|| ZInitError::unknown_service(name.as_ref()))?;
 
-        let lifecycle = self.clone();
+        let lifecycle = self.clone_lifecycle();
         tokio::spawn(lifecycle.watch_service(name.as_ref().into(), Arc::clone(service)));
 
         Ok(())
@@ -284,7 +284,7 @@ impl LifecycleManager {
                     }
 
                     let shutdown_timeout = shutdown_timeouts.remove(child);
-                    let lifecycle = self.clone();
+                    let lifecycle = self.clone_lifecycle();
                     tokio::spawn(Self::kill_wait(
                         lifecycle,
                         child.to_string(),
@@ -551,7 +551,7 @@ impl LifecycleManager {
 
             let mut handler = None;
             if !config.one_shot {
-                let lifecycle = self.clone();
+                let lifecycle = self.clone_lifecycle();
                 handler = Some(tokio::spawn(
                     lifecycle.test_loop(name.clone(), config.clone()),
                 ));
@@ -595,7 +595,7 @@ impl LifecycleManager {
     }
 
     /// Clone the lifecycle manager
-    pub fn clone(&self) -> Self {
+    pub fn clone_lifecycle(&self) -> Self {
         Self {
             pm: self.pm.clone(),
             services: Arc::clone(&self.services),

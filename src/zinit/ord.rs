@@ -18,7 +18,7 @@ pub async fn service_dependency_order(services: Arc<RwLock<ServiceTable>>) -> Pr
         for child in service.service.after.iter() {
             children
                 .entry(name.into())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(child.into());
             *indegree.entry(child.into()).or_insert(0) += 1;
         }
