@@ -47,6 +47,7 @@ pub async fn init(
     socket: &str,
     container: bool,
     debug: bool,
+    http_port: Option<u16>,
 ) -> Result<()> {
     //std::fs::create_dir_all(config)?;
     if let Err(err) = logger(if debug {
@@ -86,8 +87,7 @@ pub async fn init(
             error!("failed to monitor service {}: {}", k, err);
         };
     }
-
-    let a = api::Api::new(init, socket);
+    let a = api::Api::new(init, socket, http_port);
     a.serve().await?;
     Ok(())
 }

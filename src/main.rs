@@ -16,6 +16,7 @@ async fn main() -> Result<()> {
         .about("A runit replacement")
         .arg(Arg::with_name("socket").value_name("SOCKET").short("s").long("socket").default_value("/var/run/zinit.sock").help("path to unix socket"))
         .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
+        .arg(Arg::with_name("http").value_name("PORT").long("http").default_value("8080").help("HTTP proxy port (default: 8080, use 0 to disable)"))
         .subcommand(
             SubCommand::with_name("init")
                 .arg(
@@ -147,6 +148,15 @@ async fn main() -> Result<()> {
 
     let socket = matches.value_of("socket").unwrap();
     let debug = matches.is_present("debug");
+    let http_port_str = matches.value_of("http").unwrap_or("8080");
+    let http_port = match http_port_str.parse::<u16>() {
+        Ok(0) => None, // Disable HTTP server if port is 0
+        Ok(port) => Some(port),
+        Err(_) => {
+            eprintln!("Invalid HTTP port: {}, using default 8080", http_port_str);
+            Some(8080)
+        }
+    };
     //let debug = true;
     let result = match matches.subcommand() {
         ("init", Some(matches)) => {
@@ -156,6 +166,7 @@ async fn main() -> Result<()> {
                 socket,
                 matches.is_present("container"),
                 debug,
+                http_port,
             )
             .await
         }

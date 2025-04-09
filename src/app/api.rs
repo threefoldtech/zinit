@@ -1,14 +1,22 @@
 use crate::zinit::{config, ZInit};
 use anyhow::{bail, Context, Result};
+use axum::{
+    routing::{post, options},
+    http::{StatusCode, HeaderMap},
+    response::{IntoResponse, Response},
+    Router,
+    body::Bytes,
+};
 use nix::sys::signal;
 use serde::{Deserialize, Serialize};
 use serde_json::{self as encoder, Value};
 use std::collections::HashMap;
 use std::marker::Unpin;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::{TcpListener, UnixListener, UnixStream};
 
 // Include the OpenRPC specification
 const OPENRPC_SPEC: &str = include_str!("../../openrpc.json");
@@ -63,14 +71,14 @@ const SERVICE_FILE_ERROR: i32 = -32008;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-struct Response {
-    pub state: State,
+struct ZinitResponse {
+    pub state: ZinitState,
     pub body: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum State {
+enum ZinitState {
     Ok,
     Error,
 }
@@ -88,17 +96,149 @@ pub struct Status {
 pub struct Api {
     zinit: ZInit,
     socket: PathBuf,
+    http_port: Option<u16>,
 }
 
 impl Api {
-    pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P) -> Api {
+    pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P, http_port: Option<u16>) -> Api {
         Api {
             zinit,
             socket: socket.as_ref().to_path_buf(),
+            http_port,
         }
+    }
+    
+    // Serve HTTP proxy for JSON-RPC API
+    async fn serve_http(port: u16, zinit: ZInit) -> Result<()> {
+        // Handle JSON-RPC requests
+        async fn handle_json_rpc(
+            body: Bytes,
+            zinit: ZInit,
+        ) -> Result<Response, (StatusCode, String)> {
+            // Process the JSON-RPC request
+            let request: JsonRpcRequest = serde_json::from_slice(&body)
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON-RPC request: {}", e)))?;
+            
+            // We can't use Api::process_jsonrpc directly from an inner function
+            // So we'll manually create a JsonRpcResponse
+            let id = request.id.unwrap_or(Value::Null);
+            let method = request.method.clone();
+            let params = request.params.clone();
+            
+            // Serialize the request parameters for the Unix socket
+            let response_bytes = match method.as_str() {
+                "rpc.discover" => {
+                    // For discover, we can directly return the OpenRPC spec
+                    let spec: Value = match serde_json::from_str(OPENRPC_SPEC) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            return Err((StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to parse OpenRPC spec: {}", err)));
+                        }
+                    };
+                    
+                    let response = JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id,
+                        result: Some(spec),
+                        error: None,
+                    };
+                    
+                    serde_json::to_vec(&response)
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to serialize response: {}", e)))?
+                },
+                _ => {
+                    // For other methods, create a new JSON-RPC request to send to the Unix socket
+                    let unix_request = JsonRpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        id: Some(id.clone()),
+                        method,
+                        params,
+                    };
+                    
+                    // Serialize the request
+                    let request_bytes = serde_json::to_vec(&unix_request)
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to serialize request: {}", e)))?;
+                    
+                    // Create a Unix socket connection
+                    let mut socket = UnixStream::connect("/var/run/zinit.sock")
+                        .await
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to connect to Zinit socket: {}", e)))?;
+                    
+                    // Send the request
+                    socket.write_all(&request_bytes)
+                        .await
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to write to Zinit socket: {}", e)))?;
+                    
+                    socket.write_all(b"\n")
+                        .await
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to write newline to Zinit socket: {}", e)))?;
+                    
+                    // Read the response
+                    let mut response_data = Vec::new();
+                    socket.read_to_end(&mut response_data)
+                        .await
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to read from Zinit socket: {}", e)))?;
+                    
+                    response_data
+                }
+            };
+            
+            // Create response with CORS headers
+            let mut headers = HeaderMap::new();
+            headers.insert("Content-Type", "application/json".parse().unwrap());
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "POST, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+            
+            // Return the response
+            Ok((headers, Bytes::from(response_bytes)).into_response())
+        }
+
+        // Handle OPTIONS requests for CORS
+        async fn handle_cors() -> Response {
+            // Create response with CORS headers
+            let mut headers = HeaderMap::new();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "POST, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+            
+            (headers, "").into_response()
+        }
+
+        // Build the router
+        let app = Router::new()
+            .route("/", post(move |body: Bytes| handle_json_rpc(body, zinit.clone())))
+            .route("/", options(handle_cors));
+
+        // Run the server
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        info!("Zinit HTTP proxy listening on http://{}", addr);
+        
+        let listener = TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
+        
+        Ok(())
     }
 
     pub async fn serve(&self) -> Result<()> {
+        // Start HTTP proxy server if http_port is provided
+        if let Some(port) = self.http_port {
+            let zinit_clone = self.zinit.clone();
+            tokio::spawn(async move {
+                if let Err(e) = Self::serve_http(port, zinit_clone).await {
+                    error!("HTTP proxy server error: {}", e);
+                }
+            });
+        }
+
+        // Start Unix socket server
         let listener = UnixListener::bind(&self.socket).context("failed to listen for socket")?;
         loop {
             if let Ok((stream, _addr)) = listener.accept().await {
@@ -552,12 +692,12 @@ impl Api {
                     // When process returns None means we can terminate without
                     // writing any result to the socket.
                     Ok(None) => return,
-                    Ok(Some(body)) => Response {
+                    Ok(Some(body)) => ZinitResponse {
                         body,
-                        state: State::Ok,
+                        state: ZinitState::Ok,
                     },
-                    Err(err) => Response {
-                        state: State::Error,
+                    Err(err) => ZinitResponse {
+                        state: ZinitState::Error,
                         body: encoder::to_value(format!("{}", err)).unwrap(),
                     },
                 };
@@ -926,12 +1066,11 @@ impl Client {
         // Convert to string and trim the trailing newline
         let data = String::from_utf8(buffer)?;
         let data = data.trim_end();
-
-        let response: Response = encoder::from_str(data)?;
+        let response: ZinitResponse = encoder::from_str(data)?;
 
         match response.state {
-            State::Ok => Ok(response.body),
-            State::Error => {
+            ZinitState::Ok => Ok(response.body),
+            ZinitState::Error => {
                 let err: String = encoder::from_value(response.body)?;
                 bail!(err)
             }
