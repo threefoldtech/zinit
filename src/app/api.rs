@@ -1,5 +1,5 @@
 use crate::zinit::{config, ZInit};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use nix::sys::signal;
 use serde::{Deserialize, Serialize};
 use serde_json::{self as encoder, Value};
@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
 use tokio::net::{UnixListener, UnixStream};
+
+// Include the OpenRPC specification
+const OPENRPC_SPEC: &str = include_str!("../../openrpc.json");
 
 // JSON-RPC 2.0 structures
 #[derive(Debug, Deserialize, Serialize)]
@@ -55,6 +58,8 @@ const SERVICE_IS_DOWN: i32 = -32003;
 const INVALID_SIGNAL: i32 = -32004;
 const CONFIG_ERROR: i32 = -32005;
 const SHUTTING_DOWN: i32 = -32006;
+const SERVICE_ALREADY_EXISTS: i32 = -32007;
+const SERVICE_FILE_ERROR: i32 = -32008;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -108,6 +113,26 @@ impl Api {
 
         // Process the request based on the method
         let result = match request.method.as_str() {
+            // Obtain the OpenRPC specification
+            "rpc.discover" => {
+                let spec: Value = match serde_json::from_str(OPENRPC_SPEC) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        return JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: INTERNAL_ERROR,
+                                message: format!("Failed to parse OpenRPC spec: {}", err),
+                                data: None,
+                            }),
+                        };
+                    }
+                };
+                Ok(spec)
+            },
+
             // Service management methods
             "service.list" => Self::list(zinit).await,
 
@@ -191,6 +216,47 @@ impl Api {
             "system.shutdown" => Self::shutdown(zinit).await,
             "system.reboot" => Self::reboot(zinit).await,
 
+            // Service file operations
+            "service.create" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        if let Some(content) = params.get("content").and_then(|v| v.as_object()) {
+                            Self::create_service(name, content, zinit).await
+                        } else {
+                            Err(anyhow::anyhow!("Missing or invalid 'content' parameter"))
+                        }
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            }
+
+            "service.delete" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::delete_service(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            }
+
+            "service.get" => {
+                if let Some(params) = &request.params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        Self::get_service(name, zinit).await
+                    } else {
+                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Missing parameters"))
+                }
+            }
+
             // Unknown method
             _ => Err(anyhow::anyhow!("Method not found: {}", request.method)),
         };
@@ -226,6 +292,12 @@ impl Api {
                     CONFIG_ERROR
                 } else if err.to_string().contains("shutting down") {
                     SHUTTING_DOWN
+                } else if err.to_string().contains("Service") && err.to_string().contains("already exists") {
+                    SERVICE_ALREADY_EXISTS
+                } else if err.to_string().contains("Failed to") &&
+                          (err.to_string().contains("service file") ||
+                           err.to_string().contains("configuration")) {
+                    SERVICE_FILE_ERROR
                 } else {
                     INTERNAL_ERROR
                 };
@@ -651,6 +723,98 @@ impl Api {
 
         Ok(encoder::to_value(result)?)
     }
+
+    async fn create_service<S: AsRef<str>>(
+        name: S,
+        content: &serde_json::Map<String, Value>,
+        zinit: ZInit,
+    ) -> Result<Value> {
+        use std::fs;
+        use std::io::Write;
+
+        let name = name.as_ref();
+        
+        // Validate service name (no path traversal, valid characters)
+        if name.contains('/') || name.contains('\\') || name.contains('.') {
+            bail!("Invalid service name: must not contain '/', '\\', or '.'");
+        }
+
+        // Construct the file path
+        let file_path = PathBuf::from(format!("{}.yaml", name));
+
+        // Check if the service file already exists
+        if file_path.exists() {
+            bail!("Service '{}' already exists", name);
+        }
+
+        // Convert the JSON content to YAML
+        let yaml_content = serde_yaml::to_string(content)
+            .context("Failed to convert service configuration to YAML")?;
+
+        // Write the YAML content to the file
+        let mut file = fs::File::create(&file_path)
+            .context("Failed to create service file")?;
+        file.write_all(yaml_content.as_bytes())
+            .context("Failed to write service configuration")?;
+
+        Ok(Value::String(format!("Service '{}' created successfully", name)))
+    }
+    async fn delete_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
+        use std::fs;
+
+        let name = name.as_ref();
+        
+        // Validate service name (no path traversal, valid characters)
+        if name.contains('/') || name.contains('\\') || name.contains('.') {
+            bail!("Invalid service name: must not contain '/', '\\', or '.'");
+        }
+
+        // Construct the file path
+        let file_path = PathBuf::from(format!("{}.yaml", name));
+
+        // Check if the service file exists
+        if !file_path.exists() {
+            bail!("Service '{}' not found", name);
+        }
+
+        // Delete the file
+        fs::remove_file(&file_path)
+            .context("Failed to delete service file")?;
+
+        Ok(Value::String(format!("Service '{}' deleted successfully", name)))
+    }
+    async fn get_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
+        use std::fs;
+
+        let name = name.as_ref();
+        
+        // Validate service name (no path traversal, valid characters)
+        if name.contains('/') || name.contains('\\') || name.contains('.') {
+            bail!("Invalid service name: must not contain '/', '\\', or '.'");
+        }
+
+        // Construct the file path
+        let file_path = PathBuf::from(format!("{}.yaml", name));
+
+        // Check if the service file exists
+        if !file_path.exists() {
+            bail!("Service '{}' not found", name);
+        }
+
+        // Read the file content
+        let yaml_content = fs::read_to_string(&file_path)
+            .context("Failed to read service file")?;
+
+        // Parse YAML to JSON
+        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_content)
+            .context("Failed to parse YAML content")?;
+        
+        // Convert YAML value to JSON value
+        let json_value = serde_json::to_value(yaml_value)
+            .context("Failed to convert YAML to JSON")?;
+
+        Ok(json_value)
+    }
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -887,5 +1051,39 @@ impl Client {
 
         self.jsonrpc_request("service.kill", Some(params)).await?;
         Ok(())
+    }
+
+    // Service file operations
+    pub async fn create_service<S: AsRef<str>>(&self, name: S, content: serde_json::Map<String, Value>) -> Result<String> {
+        let params = serde_json::json!({
+            "name": name.as_ref(),
+            "content": content
+        });
+
+        let response = self.jsonrpc_request("service.create", Some(params)).await?;
+        match response {
+            Value::String(s) => Ok(s),
+            _ => Ok("Service created successfully".to_string()),
+        }
+    }
+
+    pub async fn delete_service<S: AsRef<str>>(&self, name: S) -> Result<String> {
+        let params = serde_json::json!({
+            "name": name.as_ref()
+        });
+
+        let response = self.jsonrpc_request("service.delete", Some(params)).await?;
+        match response {
+            Value::String(s) => Ok(s),
+            _ => Ok("Service deleted successfully".to_string()),
+        }
+    }
+
+    pub async fn get_service<S: AsRef<str>>(&self, name: S) -> Result<Value> {
+        let params = serde_json::json!({
+            "name": name.as_ref()
+        });
+
+        self.jsonrpc_request("service.get", Some(params)).await
     }
 }

@@ -16,6 +16,34 @@
   ],
   "methods": [
     {
+      "name": "rpc.discover",
+      "description": "Returns the OpenRPC specification for the API",
+      "params": [],
+      "result": {
+        "name": "OpenRPCSpec",
+        "description": "The OpenRPC specification",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "examples": [
+        {
+          "name": "Get API specification",
+          "params": [],
+          "result": {
+            "name": "OpenRPCSpecResult",
+            "value": {
+              "openrpc": "1.2.6",
+              "info": {
+                "version": "1.0.0",
+                "title": "Zinit JSON-RPC API"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "service.list",
       "description": "Lists all services managed by Zinit",
       "params": [],
@@ -432,67 +460,150 @@
           "data": "system is already shutting down"
         }
       ]
+    },
+    {
+      "name": "service.create",
+      "description": "Creates a new service configuration file",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to create",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "content",
+          "description": "The service configuration content",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "exec": {
+                "type": "string",
+                "description": "Command to run"
+              },
+              "oneshot": {
+                "type": "boolean",
+                "description": "Whether the service should be restarted"
+              },
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Services that must be running before this one starts"
+              },
+              "log": {
+                "type": "string",
+                "enum": ["null", "ring", "stdout"],
+                "description": "How to handle service output"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables for the service"
+              },
+              "shutdown_timeout": {
+                "type": "integer",
+                "description": "Maximum time to wait for service to stop during shutdown"
+              }
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "CreateServiceResult",
+        "description": "Result of the create operation",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "errors": [
+        {
+          "code": -32007,
+          "message": "Service already exists",
+          "data": "Service 'name' already exists"
+        },
+        {
+          "code": -32008,
+          "message": "Service file error",
+          "data": "Failed to create service file"
+        }
+      ]
+    },
+    {
+      "name": "service.delete",
+      "description": "Deletes a service configuration file",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to delete",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "DeleteServiceResult",
+        "description": "Result of the delete operation",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "Service 'name' not found"
+        },
+        {
+          "code": -32008,
+          "message": "Service file error",
+          "data": "Failed to delete service file"
+        }
+      ]
+    },
+    {
+      "name": "service.get",
+      "description": "Gets a service configuration file",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to get",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "GetServiceResult",
+        "description": "The service configuration",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "Service 'name' not found"
+        },
+        {
+          "code": -32008,
+          "message": "Service file error",
+          "data": "Failed to read service file"
+        }
+      ]
     }
   ],
   "components": {
     "contentDescriptors": {},
     "schemas": {}
-  },
-  "errors": [
-    {
-      "code": -32600,
-      "message": "Invalid Request",
-      "description": "The JSON sent is not a valid Request object"
-    },
-    {
-      "code": -32601,
-      "message": "Method not found",
-      "description": "The method does not exist / is not available"
-    },
-    {
-      "code": -32602,
-      "message": "Invalid params",
-      "description": "Invalid method parameter(s)"
-    },
-    {
-      "code": -32603,
-      "message": "Internal error",
-      "description": "Internal JSON-RPC error"
-    },
-    {
-      "code": -32000,
-      "message": "Service not found",
-      "description": "The requested service does not exist"
-    },
-    {
-      "code": -32001,
-      "message": "Service already monitored",
-      "description": "The service is already being monitored"
-    },
-    {
-      "code": -32002,
-      "message": "Service is up",
-      "description": "The service is currently running"
-    },
-    {
-      "code": -32003,
-      "message": "Service is down",
-      "description": "The service is currently not running"
-    },
-    {
-      "code": -32004,
-      "message": "Invalid signal",
-      "description": "The provided signal is invalid"
-    },
-    {
-      "code": -32005,
-      "message": "Config error",
-      "description": "Error in service configuration"
-    },
-    {
-      "code": -32006,
-      "message": "Shutting down",
-      "description": "The system is shutting down"
-    }
-  ]
+  }
 }

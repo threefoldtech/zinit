@@ -1,6 +1,7 @@
 extern crate zinit;
 
 use anyhow::Result;
+use serde_json::json;
 use std::env;
 use tokio::time::{sleep, Duration};
 
@@ -111,6 +112,44 @@ async fn main() -> Result<()> {
         client.forget("sleep-service").await?;
     }
     client.forget("find-service").await?;
+
+    // Demonstrate service file operations
+    println!("\nDemonstrating service file operations...");
+    
+    // Create a new service using the API
+    println!("Creating a new service via API...");
+    let service_content = json!({
+        "exec": "echo 'Hello from API-created service'",
+        "oneshot": true,
+        "log": "stdout"
+    }).as_object().unwrap().clone();
+    
+    let result = client.create_service("api-service", service_content).await?;
+    println!("Create service result: {}", result);
+    
+    // Get the service configuration
+    println!("\nGetting service configuration...");
+    let config = client.get_service("api-service").await?;
+    println!("Service configuration: {}", serde_json::to_string_pretty(&config)?);
+    
+    // Monitor and start the new service
+    println!("\nMonitoring and starting the new service...");
+    client.monitor("api-service").await?;
+    client.start("api-service").await?;
+    
+    // Wait a bit and check status
+    sleep(Duration::from_secs(2)).await;
+    let status = client.status("api-service").await?;
+    println!("api-service status: {:?}", status);
+    
+    // Delete the service
+    println!("\nDeleting the service...");
+    if status.pid == 0 {
+        // Only forget if it's not running
+        client.forget("api-service").await?;
+        let result = client.delete_service("api-service").await?;
+        println!("Delete service result: {}", result);
+    }
 
     // Shutdown zinit
     println!("\nShutting down zinit...");
