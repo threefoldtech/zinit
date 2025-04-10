@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".",
+    "zinit-client"
+]
+
 [package]
 name = "zinit"
 version = "0.2.0"
