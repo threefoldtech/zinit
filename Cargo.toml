@@ -37,4 +37,7 @@ path = "src/main.rs"
 [[bin]]
 name = "testapp"
 path = "src/bin/testapp.rs"
+[[bin]]
+name = "zinit-http"
+path = "src/bin/zinit-http.rs"
 

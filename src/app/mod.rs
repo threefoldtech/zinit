@@ -47,7 +47,6 @@ pub async fn init(
     socket: &str,
     container: bool,
     debug: bool,
-    http_port: Option<u16>,
 ) -> Result<()> {
     //std::fs::create_dir_all(config)?;
     if let Err(err) = logger(if debug {
@@ -87,7 +86,7 @@ pub async fn init(
             error!("failed to monitor service {}: {}", k, err);
         };
     }
-    let a = api::Api::new(init, socket, http_port);
+    let a = api::Api::new(init, socket, None); // HTTP proxy is now a separate binary
     a.serve().await?;
     Ok(())
 }
