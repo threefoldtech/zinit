@@ -1,11 +1,11 @@
 use crate::zinit::{config, ZInit};
 use anyhow::{bail, Context, Result};
 use axum::{
-    routing::{post, options},
-    http::{StatusCode, HeaderMap},
-    response::{IntoResponse, Response},
-    Router,
     body::Bytes,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{options, post},
+    Router,
 };
 use nix::sys::signal;
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,7 @@ impl Api {
             http_port,
         }
     }
-    
+
     // Serve HTTP proxy for JSON-RPC API
     async fn serve_http(port: u16, zinit: ZInit) -> Result<()> {
         // Handle JSON-RPC requests
@@ -116,15 +116,19 @@ impl Api {
             zinit: ZInit,
         ) -> Result<Response, (StatusCode, String)> {
             // Process the JSON-RPC request
-            let request: JsonRpcRequest = serde_json::from_slice(&body)
-                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON-RPC request: {}", e)))?;
-            
+            let request: JsonRpcRequest = serde_json::from_slice(&body).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid JSON-RPC request: {}", e),
+                )
+            })?;
+
             // We can't use Api::process_jsonrpc directly from an inner function
             // So we'll manually create a JsonRpcResponse
             let id = request.id.unwrap_or(Value::Null);
             let method = request.method.clone();
             let params = request.params.clone();
-            
+
             // Serialize the request parameters for the Unix socket
             let response_bytes = match method.as_str() {
                 "rpc.discover" => {
@@ -132,22 +136,27 @@ impl Api {
                     let spec: Value = match serde_json::from_str(OPENRPC_SPEC) {
                         Ok(value) => value,
                         Err(err) => {
-                            return Err((StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("Failed to parse OpenRPC spec: {}", err)));
+                            return Err((
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to parse OpenRPC spec: {}", err),
+                            ));
                         }
                     };
-                    
+
                     let response = JsonRpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id,
                         result: Some(spec),
                         error: None,
                     };
-                    
-                    serde_json::to_vec(&response)
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to serialize response: {}", e)))?
-                },
+
+                    serde_json::to_vec(&response).map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to serialize response: {}", e),
+                        )
+                    })?
+                }
                 _ => {
                     // For other methods, create a new JSON-RPC request to send to the Unix socket
                     let unix_request = JsonRpcRequest {
@@ -156,47 +165,67 @@ impl Api {
                         method,
                         params,
                     };
-                    
+
                     // Serialize the request
-                    let request_bytes = serde_json::to_vec(&unix_request)
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to serialize request: {}", e)))?;
-                    
+                    let request_bytes = serde_json::to_vec(&unix_request).map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to serialize request: {}", e),
+                        )
+                    })?;
+
                     // Create a Unix socket connection
-                    let mut socket = UnixStream::connect("/var/run/zinit.sock")
-                        .await
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to connect to Zinit socket: {}", e)))?;
-                    
+                    let mut socket =
+                        UnixStream::connect("/var/run/zinit.sock")
+                            .await
+                            .map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to connect to Zinit socket: {}", e),
+                                )
+                            })?;
+
                     // Send the request
-                    socket.write_all(&request_bytes)
-                        .await
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to write to Zinit socket: {}", e)))?;
-                    
-                    socket.write_all(b"\n")
-                        .await
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to write newline to Zinit socket: {}", e)))?;
-                    
+                    socket.write_all(&request_bytes).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to write to Zinit socket: {}", e),
+                        )
+                    })?;
+
+                    socket.write_all(b"\n").await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to write newline to Zinit socket: {}", e),
+                        )
+                    })?;
+
                     // Read the response
                     let mut response_data = Vec::new();
-                    socket.read_to_end(&mut response_data)
-                        .await
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed to read from Zinit socket: {}", e)))?;
-                    
+                    socket.read_to_end(&mut response_data).await.map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to read from Zinit socket: {}", e),
+                        )
+                    })?;
+
                     response_data
                 }
             };
-            
+
             // Create response with CORS headers
             let mut headers = HeaderMap::new();
             headers.insert("Content-Type", "application/json".parse().unwrap());
             headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-            headers.insert("Access-Control-Allow-Methods", "POST, OPTIONS".parse().unwrap());
-            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
-            
+            headers.insert(
+                "Access-Control-Allow-Methods",
+                "POST, OPTIONS".parse().unwrap(),
+            );
+            headers.insert(
+                "Access-Control-Allow-Headers",
+                "Content-Type".parse().unwrap(),
+            );
+
             // Return the response
             Ok((headers, Bytes::from(response_bytes)).into_response())
         }
@@ -206,24 +235,33 @@ impl Api {
             // Create response with CORS headers
             let mut headers = HeaderMap::new();
             headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-            headers.insert("Access-Control-Allow-Methods", "POST, OPTIONS".parse().unwrap());
-            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
-            
+            headers.insert(
+                "Access-Control-Allow-Methods",
+                "POST, OPTIONS".parse().unwrap(),
+            );
+            headers.insert(
+                "Access-Control-Allow-Headers",
+                "Content-Type".parse().unwrap(),
+            );
+
             (headers, "").into_response()
         }
 
         // Build the router
         let app = Router::new()
-            .route("/", post(move |body: Bytes| handle_json_rpc(body, zinit.clone())))
+            .route(
+                "/",
+                post(move |body: Bytes| handle_json_rpc(body, zinit.clone())),
+            )
             .route("/", options(handle_cors));
 
         // Run the server
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         info!("Zinit HTTP proxy listening on http://{}", addr);
-        
+
         let listener = TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;
-        
+
         Ok(())
     }
 
@@ -271,7 +309,7 @@ impl Api {
                     }
                 };
                 Ok(spec)
-            },
+            }
 
             // Service management methods
             "service.list" => Self::list(zinit).await,
@@ -432,11 +470,14 @@ impl Api {
                     CONFIG_ERROR
                 } else if err.to_string().contains("shutting down") {
                     SHUTTING_DOWN
-                } else if err.to_string().contains("Service") && err.to_string().contains("already exists") {
+                } else if err.to_string().contains("Service")
+                    && err.to_string().contains("already exists")
+                {
                     SERVICE_ALREADY_EXISTS
-                } else if err.to_string().contains("Failed to") &&
-                          (err.to_string().contains("service file") ||
-                           err.to_string().contains("configuration")) {
+                } else if err.to_string().contains("Failed to")
+                    && (err.to_string().contains("service file")
+                        || err.to_string().contains("configuration"))
+                {
                     SERVICE_FILE_ERROR
                 } else {
                     INTERNAL_ERROR
@@ -873,7 +914,7 @@ impl Api {
         use std::io::Write;
 
         let name = name.as_ref();
-        
+
         // Validate service name (no path traversal, valid characters)
         if name.contains('/') || name.contains('\\') || name.contains('.') {
             bail!("Invalid service name: must not contain '/', '\\', or '.'");
@@ -892,18 +933,20 @@ impl Api {
             .context("Failed to convert service configuration to YAML")?;
 
         // Write the YAML content to the file
-        let mut file = fs::File::create(&file_path)
-            .context("Failed to create service file")?;
+        let mut file = fs::File::create(&file_path).context("Failed to create service file")?;
         file.write_all(yaml_content.as_bytes())
             .context("Failed to write service configuration")?;
 
-        Ok(Value::String(format!("Service '{}' created successfully", name)))
+        Ok(Value::String(format!(
+            "Service '{}' created successfully",
+            name
+        )))
     }
     async fn delete_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
         use std::fs;
 
         let name = name.as_ref();
-        
+
         // Validate service name (no path traversal, valid characters)
         if name.contains('/') || name.contains('\\') || name.contains('.') {
             bail!("Invalid service name: must not contain '/', '\\', or '.'");
@@ -918,16 +961,18 @@ impl Api {
         }
 
         // Delete the file
-        fs::remove_file(&file_path)
-            .context("Failed to delete service file")?;
+        fs::remove_file(&file_path).context("Failed to delete service file")?;
 
-        Ok(Value::String(format!("Service '{}' deleted successfully", name)))
+        Ok(Value::String(format!(
+            "Service '{}' deleted successfully",
+            name
+        )))
     }
     async fn get_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
         use std::fs;
 
         let name = name.as_ref();
-        
+
         // Validate service name (no path traversal, valid characters)
         if name.contains('/') || name.contains('\\') || name.contains('.') {
             bail!("Invalid service name: must not contain '/', '\\', or '.'");
@@ -942,16 +987,15 @@ impl Api {
         }
 
         // Read the file content
-        let yaml_content = fs::read_to_string(&file_path)
-            .context("Failed to read service file")?;
+        let yaml_content = fs::read_to_string(&file_path).context("Failed to read service file")?;
 
         // Parse YAML to JSON
-        let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_content)
-            .context("Failed to parse YAML content")?;
-        
+        let yaml_value: serde_yaml::Value =
+            serde_yaml::from_str(&yaml_content).context("Failed to parse YAML content")?;
+
         // Convert YAML value to JSON value
-        let json_value = serde_json::to_value(yaml_value)
-            .context("Failed to convert YAML to JSON")?;
+        let json_value =
+            serde_json::to_value(yaml_value).context("Failed to convert YAML to JSON")?;
 
         Ok(json_value)
     }
@@ -1193,7 +1237,11 @@ impl Client {
     }
 
     // Service file operations
-    pub async fn create_service<S: AsRef<str>>(&self, name: S, content: serde_json::Map<String, Value>) -> Result<String> {
+    pub async fn create_service<S: AsRef<str>>(
+        &self,
+        name: S,
+        content: serde_json::Map<String, Value>,
+    ) -> Result<String> {
         let params = serde_json::json!({
             "name": name.as_ref(),
             "content": content
