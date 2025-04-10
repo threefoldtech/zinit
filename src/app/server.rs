@@ -770,7 +770,7 @@ impl Api {
             name
         )))
     }
-    
+
     async fn delete_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
         use std::fs;
 
@@ -797,7 +797,7 @@ impl Api {
             name
         )))
     }
-    
+
     async fn get_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
         use std::fs;
 

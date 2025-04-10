@@ -1,9 +1,9 @@
-pub mod server;
 pub mod client;
+pub mod server;
 
-use crate::zinit;
-use self::server::Api;
 use self::client::Client;
+use self::server::Api;
+use crate::zinit;
 use anyhow::{Context, Result};
 use serde_yaml as encoder;
 use std::path::{Path, PathBuf};

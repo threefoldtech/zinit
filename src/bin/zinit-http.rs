@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     } else {
         log::LevelFilter::Info
     };
-    
+
     let logger = fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -67,12 +67,12 @@ async fn main() -> Result<()> {
         })
         .level(level)
         .chain(std::io::stdout());
-    
+
     let logger = match std::fs::OpenOptions::new().write(true).open("/dev/kmsg") {
         Ok(file) => logger.chain(file),
         Err(_) => logger,
     };
-    
+
     if let Err(err) = logger.apply() {
         eprintln!("failed to setup logging: {}", err);
     }
@@ -177,7 +177,7 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
             _ => {
                 // Create a client to connect to the Zinit socket
                 let client = Client::new(socket_path);
-                
+
                 // Forward the request to Zinit
                 let result = match method.as_str() {
                     "service.list" => {
@@ -193,9 +193,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 format!("Failed to serialize result: {}", e),
                             )
                         })?
-                    },
+                    }
                     "service.status" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             let result = client.status(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -214,9 +218,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.start" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             client.start(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -230,9 +238,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.stop" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             client.stop(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -246,9 +258,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.monitor" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             // For monitoring, we need to check if the service file exists first
                             let file_path = format!("{}.yaml", name);
                             if !std::path::Path::new(&file_path).exists() {
@@ -257,7 +273,7 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                     format!("Service file '{}' not found", file_path),
                                 ));
                             }
-                            
+
                             // Now we can call monitor
                             client.monitor(name).await.map_err(|e| {
                                 (
@@ -272,9 +288,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.forget" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             client.forget(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -288,10 +308,18 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.kill" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
-                            if let Some(signal) = params.as_ref().and_then(|p| p.get("signal")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if let Some(signal) = params
+                                .as_ref()
+                                .and_then(|p| p.get("signal"))
+                                .and_then(|v| v.as_str())
+                            {
                                 client.kill(name, signal).await.map_err(|e| {
                                     (
                                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -311,7 +339,7 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "system.shutdown" => {
                         client.shutdown().await.map_err(|e| {
                             (
@@ -320,7 +348,7 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                             )
                         })?;
                         serde_json::Value::Null
-                    },
+                    }
                     "system.reboot" => {
                         client.reboot().await.map_err(|e| {
                             (
@@ -329,16 +357,27 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                             )
                         })?;
                         serde_json::Value::Null
-                    },
+                    }
                     "service.create" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
-                            if let Some(content) = params.as_ref().and_then(|p| p.get("content")).and_then(|v| v.as_object()) {
-                                let result = client.create_service(name, content.clone()).await.map_err(|e| {
-                                    (
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        format!("Failed to execute create_service: {}", e),
-                                    )
-                                })?;
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if let Some(content) = params
+                                .as_ref()
+                                .and_then(|p| p.get("content"))
+                                .and_then(|v| v.as_object())
+                            {
+                                let result = client
+                                    .create_service(name, content.clone())
+                                    .await
+                                    .map_err(|e| {
+                                        (
+                                            StatusCode::INTERNAL_SERVER_ERROR,
+                                            format!("Failed to execute create_service: {}", e),
+                                        )
+                                    })?;
                                 serde_json::to_value(result).map_err(|e| {
                                     (
                                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -357,9 +396,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.delete" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             let result = client.delete_service(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -378,9 +421,13 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     "service.get" => {
-                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = params
+                            .as_ref()
+                            .and_then(|p| p.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             client.get_service(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -393,7 +440,7 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                                 "Missing or invalid 'name' parameter".to_string(),
                             ));
                         }
-                    },
+                    }
                     // Add other methods as needed
                     _ => {
                         return Err((

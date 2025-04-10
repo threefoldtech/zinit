@@ -128,48 +128,63 @@ impl Client {
     }
 
     /// Send a JSON-RPC request and return the result
-    async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value, ClientError> {
+    async fn jsonrpc_request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, ClientError> {
         match &self.transport {
             Transport::UnixSocket(socket_path) => {
                 // First try JSON-RPC
                 let result = self.try_json_rpc(method, params.clone(), socket_path).await;
-                
+
                 // If JSON-RPC fails with specific errors, try legacy protocol
                 match &result {
-                    Err(ClientError::InvalidResponse(msg)) if msg.contains("missing both result and error") => {
+                    Err(ClientError::InvalidResponse(msg))
+                        if msg.contains("missing both result and error") =>
+                    {
                         log::debug!("Invalid JSON-RPC response, trying legacy protocol");
                         self.try_legacy_protocol(method, params, socket_path).await
-                    },
+                    }
                     Err(ClientError::SerializationError(_)) => {
                         log::debug!("Failed to parse JSON-RPC response, trying legacy protocol");
                         self.try_legacy_protocol(method, params, socket_path).await
-                    },
+                    }
                     _ => result,
                 }
-            },
+            }
             Transport::Http(url) => {
                 // For HTTP, we only use JSON-RPC
                 let request = JsonRpcRequest {
                     jsonrpc: "2.0".to_string(),
-                    id: Some(Value::Number(serde_json::Number::from(self.next_id.fetch_add(1, Ordering::SeqCst)))),
+                    id: Some(Value::Number(serde_json::Number::from(
+                        self.next_id.fetch_add(1, Ordering::SeqCst),
+                    ))),
                     method: method.to_string(),
                     params,
                 };
-                
+
                 self.http_request(&request, url).await
-            },
+            }
         }
     }
-    
+
     /// Try using JSON-RPC protocol
-    async fn try_json_rpc(&self, method: &str, params: Option<Value>, socket_path: &Path) -> Result<Value, ClientError> {
+    async fn try_json_rpc(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        socket_path: &Path,
+    ) -> Result<Value, ClientError> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: Some(Value::Number(serde_json::Number::from(self.next_id.fetch_add(1, Ordering::SeqCst)))),
+            id: Some(Value::Number(serde_json::Number::from(
+                self.next_id.fetch_add(1, Ordering::SeqCst),
+            ))),
             method: method.to_string(),
             params,
         };
-        
+
         // Connect to the Unix socket
         let stream = UnixStream::connect(socket_path)
             .await
@@ -208,8 +223,8 @@ impl Client {
         }
 
         // Convert to string and trim the trailing newline
-        let data = String::from_utf8(buffer)
-            .map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
+        let data =
+            String::from_utf8(buffer).map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
         let data = data.trim_end();
 
         // Parse the JSON-RPC response
@@ -244,95 +259,138 @@ impl Client {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         format!("status {}", name)
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
+            }
             "service.start" => {
                 if let Some(params) = &params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         format!("start {}", name)
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
+            }
             "service.stop" => {
                 if let Some(params) = &params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         format!("stop {}", name)
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
+            }
             "service.forget" => {
                 if let Some(params) = &params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         format!("forget {}", name)
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
+            }
             "service.monitor" => {
                 if let Some(params) = &params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         format!("monitor {}", name)
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
+            }
             "service.kill" => {
                 if let Some(params) = &params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         if let Some(signal) = params.get("signal").and_then(|v| v.as_str()) {
                             format!("kill {} {}", name, signal)
                         } else {
-                            return Err(ClientError::InvalidResponse("Missing or invalid 'signal' parameter".to_string()));
+                            return Err(ClientError::InvalidResponse(
+                                "Missing or invalid 'signal' parameter".to_string(),
+                            ));
                         }
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
+            }
             "service.create" => {
-                return Err(ClientError::InvalidResponse("Service creation not supported in legacy protocol".to_string()));
-            },
+                return Err(ClientError::InvalidResponse(
+                    "Service creation not supported in legacy protocol".to_string(),
+                ));
+            }
             "service.delete" => {
-                return Err(ClientError::InvalidResponse("Service deletion not supported in legacy protocol".to_string()));
-            },
+                return Err(ClientError::InvalidResponse(
+                    "Service deletion not supported in legacy protocol".to_string(),
+                ));
+            }
             "service.get" => {
-                return Err(ClientError::InvalidResponse("Getting service configuration not supported in legacy protocol".to_string()));
-            },
+                return Err(ClientError::InvalidResponse(
+                    "Getting service configuration not supported in legacy protocol".to_string(),
+                ));
+            }
             "rpc.discover" => {
-                return Err(ClientError::InvalidResponse("RPC discovery not supported in legacy protocol".to_string()));
-            },
+                return Err(ClientError::InvalidResponse(
+                    "RPC discovery not supported in legacy protocol".to_string(),
+                ));
+            }
             "service.restart" => {
                 if let Some(params) = &params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         format!("restart {}", name)
                     } else {
-                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                        return Err(ClientError::InvalidResponse(
+                            "Missing or invalid 'name' parameter".to_string(),
+                        ));
                     }
                 } else {
-                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                    return Err(ClientError::InvalidResponse(
+                        "Missing parameters".to_string(),
+                    ));
                 }
-            },
-            _ => return Err(ClientError::InvalidResponse(format!("Unsupported method for legacy protocol: {}", method))),
+            }
+            _ => {
+                return Err(ClientError::InvalidResponse(format!(
+                    "Unsupported method for legacy protocol: {}",
+                    method
+                )))
+            }
         };
 
         // Use the legacy protocol
@@ -378,8 +436,8 @@ impl Client {
         }
 
         // Convert to string and trim the trailing newline
-        let data = String::from_utf8(buffer)
-            .map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
+        let data =
+            String::from_utf8(buffer).map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
         let data = data.trim_end();
 
         // Parse the response
@@ -518,7 +576,8 @@ impl Client {
             "name": name.as_ref()
         });
 
-        self.jsonrpc_request("service.monitor", Some(params)).await?;
+        self.jsonrpc_request("service.monitor", Some(params))
+            .await?;
         Ok(())
     }
 

@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{self as encoder, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
 use tokio::net::UnixStream;
 
@@ -62,19 +62,20 @@ impl Client {
     async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
         // First try JSON-RPC
         let result = self.try_jsonrpc(method, params.clone()).await;
-        
+
         // If JSON-RPC fails, try legacy protocol
         if let Err(e) = &result {
-            if e.to_string().contains("Invalid JSON-RPC response") ||
-               e.to_string().contains("Failed to parse") {
+            if e.to_string().contains("Invalid JSON-RPC response")
+                || e.to_string().contains("Failed to parse")
+            {
                 debug!("JSON-RPC failed, trying legacy protocol: {}", e);
                 return self.try_legacy_protocol(method, params).await;
             }
         }
-        
+
         result
     }
-    
+
     // Try using JSON-RPC protocol
     async fn try_jsonrpc(&self, method: &str, params: Option<Value>) -> Result<Value> {
         // Get a unique ID for this request
@@ -146,7 +147,7 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "service.start" => {
                 if let Some(params) = params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
@@ -157,7 +158,7 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "service.stop" => {
                 if let Some(params) = params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
@@ -168,7 +169,7 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "service.forget" => {
                 if let Some(params) = params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
@@ -179,7 +180,7 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "service.monitor" => {
                 if let Some(params) = params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
@@ -190,7 +191,7 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "service.kill" => {
                 if let Some(params) = params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
@@ -205,23 +206,23 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "service.create" => {
                 // The legacy protocol doesn't directly support service creation
                 bail!("Service creation not supported in legacy protocol");
-            },
+            }
             "service.delete" => {
                 // The legacy protocol doesn't directly support service deletion
                 bail!("Service deletion not supported in legacy protocol");
-            },
+            }
             "service.get" => {
                 // The legacy protocol doesn't directly support getting service config
                 bail!("Getting service configuration not supported in legacy protocol");
-            },
+            }
             "rpc.discover" => {
                 // This is a JSON-RPC specific method with no legacy equivalent
                 bail!("RPC discovery not supported in legacy protocol");
-            },
+            }
             "service.restart" => {
                 if let Some(params) = params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
@@ -232,7 +233,7 @@ impl Client {
                 } else {
                     bail!("Missing parameters");
                 }
-            },
+            }
             "log" => {
                 if let Some(params) = params {
                     if let Some(filter) = params.get("filter").and_then(|v| v.as_str()) {
@@ -251,7 +252,7 @@ impl Client {
                 } else {
                     "log".to_string()
                 }
-            },
+            }
             _ => bail!("Unsupported method for legacy protocol: {}", method),
         };
 
