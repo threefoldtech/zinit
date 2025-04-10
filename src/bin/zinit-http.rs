@@ -320,6 +320,70 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                         })?;
                         serde_json::Value::Null
                     },
+                    "service.create" => {
+                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                            if let Some(content) = params.as_ref().and_then(|p| p.get("content")).and_then(|v| v.as_object()) {
+                                let result = client.create_service(name, content.clone()).await.map_err(|e| {
+                                    (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        format!("Failed to execute create_service: {}", e),
+                                    )
+                                })?;
+                                serde_json::to_value(result).map_err(|e| {
+                                    (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        format!("Failed to serialize result: {}", e),
+                                    )
+                                })?
+                            } else {
+                                return Err((
+                                    StatusCode::BAD_REQUEST,
+                                    "Missing or invalid 'content' parameter".to_string(),
+                                ));
+                            }
+                        } else {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                "Missing or invalid 'name' parameter".to_string(),
+                            ));
+                        }
+                    },
+                    "service.delete" => {
+                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                            let result = client.delete_service(name).await.map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to execute delete_service: {}", e),
+                                )
+                            })?;
+                            serde_json::to_value(result).map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to serialize result: {}", e),
+                                )
+                            })?
+                        } else {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                "Missing or invalid 'name' parameter".to_string(),
+                            ));
+                        }
+                    },
+                    "service.get" => {
+                        if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                            client.get_service(name).await.map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to execute get_service: {}", e),
+                                )
+                            })?
+                        } else {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                "Missing or invalid 'name' parameter".to_string(),
+                            ));
+                        }
+                    },
                     // Add other methods as needed
                     _ => {
                         return Err((

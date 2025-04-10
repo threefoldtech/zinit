@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     let client = http_client;
     
     // Service name for our example
-    let service_name = "test123";
+    let service_name = "test1234";
     
     // Step 1: List existing services
     println!("Listing all services before creating our test service:");
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
     
     // Create the service configuration
     let service_config = json!({
-        "exec": "echo 'test123 hello'",
+        "exec": "echo 'hello from test service'",
         "oneshot": false,
         "log": "stdout"
     }).as_object().unwrap().clone();
