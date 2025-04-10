@@ -1,6 +1,9 @@
-pub mod api;
+pub mod server;
+pub mod client;
 
 use crate::zinit;
+use self::server::Api;
+use self::client::Client;
 use anyhow::{Context, Result};
 use serde_yaml as encoder;
 use std::path::{Path, PathBuf};
@@ -86,51 +89,51 @@ pub async fn init(
             error!("failed to monitor service {}: {}", k, err);
         };
     }
-    let a = api::Api::new(init, socket, None); // HTTP proxy is now a separate binary
+    let a = Api::new(init, socket, None); // HTTP proxy is now a separate binary
     a.serve().await?;
     Ok(())
 }
 
 pub async fn list(socket: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     let results = client.list().await?;
     encoder::to_writer(std::io::stdout(), &results)?;
     Ok(())
 }
 
 pub async fn shutdown(socket: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.shutdown().await?;
     Ok(())
 }
 
 pub async fn reboot(socket: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.reboot().await?;
     Ok(())
 }
 
 pub async fn status(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     let results = client.status(name).await?;
     encoder::to_writer(std::io::stdout(), &results)?;
     Ok(())
 }
 
 pub async fn start(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.start(name).await?;
     Ok(())
 }
 
 pub async fn stop(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.stop(name).await?;
     Ok(())
 }
 
 pub async fn restart(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.stop(name).await?;
     //pull status
     for _ in 0..20 {
@@ -148,24 +151,24 @@ pub async fn restart(socket: &str, name: &str) -> Result<()> {
 }
 
 pub async fn forget(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.forget(name).await?;
     Ok(())
 }
 
 pub async fn monitor(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.monitor(name).await?;
     Ok(())
 }
 
 pub async fn kill(socket: &str, name: &str, signal: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     client.kill(name, signal).await?;
     Ok(())
 }
 pub async fn logs(socket: &str, filter: Option<&str>, follow: bool) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = Client::new(socket);
     if let Some(filter) = filter {
         client.status(filter).await?;
     }

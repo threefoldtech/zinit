@@ -7,5 +7,4 @@ extern crate tokio;
 
 pub mod app;
 pub mod manager;
-pub mod testapp;
 pub mod zinit;

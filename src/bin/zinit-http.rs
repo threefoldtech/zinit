@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{App, Arg};
 use git_version::git_version;
 use std::path::Path;
-use zinit::app::api::Client;
+use zinit::app::client::Client;
 
 const GIT_VERSION: &str = git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 
@@ -249,6 +249,16 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                     },
                     "service.monitor" => {
                         if let Some(name) = params.as_ref().and_then(|p| p.get("name")).and_then(|v| v.as_str()) {
+                            // For monitoring, we need to check if the service file exists first
+                            let file_path = format!("{}.yaml", name);
+                            if !std::path::Path::new(&file_path).exists() {
+                                return Err((
+                                    StatusCode::BAD_REQUEST,
+                                    format!("Service file '{}' not found", file_path),
+                                ));
+                            }
+                            
+                            // Now we can call monitor
                             client.monitor(name).await.map_err(|e| {
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,

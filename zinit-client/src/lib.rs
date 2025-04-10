@@ -70,6 +70,22 @@ struct JsonRpcError {
     data: Option<Value>,
 }
 
+/// Legacy protocol response structure
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+struct ZinitResponse {
+    pub state: ZinitState,
+    pub body: Value,
+}
+
+/// Legacy protocol state enum
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ZinitState {
+    Ok,
+    Error,
+}
+
 /// Service status information
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Status {
@@ -113,28 +129,47 @@ impl Client {
 
     /// Send a JSON-RPC request and return the result
     async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value, ClientError> {
-        // Get a unique ID for this request
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-
+        match &self.transport {
+            Transport::UnixSocket(socket_path) => {
+                // First try JSON-RPC
+                let result = self.try_json_rpc(method, params.clone(), socket_path).await;
+                
+                // If JSON-RPC fails with specific errors, try legacy protocol
+                match &result {
+                    Err(ClientError::InvalidResponse(msg)) if msg.contains("missing both result and error") => {
+                        log::debug!("Invalid JSON-RPC response, trying legacy protocol");
+                        self.try_legacy_protocol(method, params, socket_path).await
+                    },
+                    Err(ClientError::SerializationError(_)) => {
+                        log::debug!("Failed to parse JSON-RPC response, trying legacy protocol");
+                        self.try_legacy_protocol(method, params, socket_path).await
+                    },
+                    _ => result,
+                }
+            },
+            Transport::Http(url) => {
+                // For HTTP, we only use JSON-RPC
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    id: Some(Value::Number(serde_json::Number::from(self.next_id.fetch_add(1, Ordering::SeqCst)))),
+                    method: method.to_string(),
+                    params,
+                };
+                
+                self.http_request(&request, url).await
+            },
+        }
+    }
+    
+    /// Try using JSON-RPC protocol
+    async fn try_json_rpc(&self, method: &str, params: Option<Value>, socket_path: &Path) -> Result<Value, ClientError> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: Some(Value::Number(serde_json::Number::from(id))),
+            id: Some(Value::Number(serde_json::Number::from(self.next_id.fetch_add(1, Ordering::SeqCst)))),
             method: method.to_string(),
             params,
         };
-
-        match &self.transport {
-            Transport::UnixSocket(socket_path) => self.unix_socket_request(&request, socket_path).await,
-            Transport::Http(url) => self.http_request(&request, url).await,
-        }
-    }
-
-    /// Send a request via Unix socket
-    async fn unix_socket_request(
-        &self,
-        request: &JsonRpcRequest,
-        socket_path: &Path,
-    ) -> Result<Value, ClientError> {
+        
         // Connect to the Unix socket
         let stream = UnixStream::connect(socket_path)
             .await
@@ -149,7 +184,7 @@ impl Client {
         let mut con = BufStream::new(stream);
 
         // Serialize and send the request
-        let request_bytes = serde_json::to_vec(request)?;
+        let request_bytes = serde_json::to_vec(&request)?;
         con.write_all(&request_bytes).await?;
         con.write_all(b"\n").await?;
         con.flush().await?;
@@ -189,6 +224,174 @@ impl Client {
             Err(ClientError::InvalidResponse(
                 "Missing both result and error".to_string(),
             ))
+        }
+    }
+
+    /// Try to use the legacy protocol as a fallback
+    async fn try_legacy_protocol(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        socket_path: &Path,
+    ) -> Result<Value, ClientError> {
+        // Convert JSON-RPC method and params to legacy command
+        let cmd = match method {
+            "service.list" => "list".to_string(),
+            "system.shutdown" => "shutdown".to_string(),
+            "system.reboot" => "reboot".to_string(),
+            "service.status" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        format!("status {}", name)
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            "service.start" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        format!("start {}", name)
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            "service.stop" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        format!("stop {}", name)
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            "service.forget" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        format!("forget {}", name)
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            "service.monitor" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        format!("monitor {}", name)
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            "service.kill" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        if let Some(signal) = params.get("signal").and_then(|v| v.as_str()) {
+                            format!("kill {} {}", name, signal)
+                        } else {
+                            return Err(ClientError::InvalidResponse("Missing or invalid 'signal' parameter".to_string()));
+                        }
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            "service.create" => {
+                return Err(ClientError::InvalidResponse("Service creation not supported in legacy protocol".to_string()));
+            },
+            "service.delete" => {
+                return Err(ClientError::InvalidResponse("Service deletion not supported in legacy protocol".to_string()));
+            },
+            "service.get" => {
+                return Err(ClientError::InvalidResponse("Getting service configuration not supported in legacy protocol".to_string()));
+            },
+            "rpc.discover" => {
+                return Err(ClientError::InvalidResponse("RPC discovery not supported in legacy protocol".to_string()));
+            },
+            "service.restart" => {
+                if let Some(params) = &params {
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        format!("restart {}", name)
+                    } else {
+                        return Err(ClientError::InvalidResponse("Missing or invalid 'name' parameter".to_string()));
+                    }
+                } else {
+                    return Err(ClientError::InvalidResponse("Missing parameters".to_string()));
+                }
+            },
+            _ => return Err(ClientError::InvalidResponse(format!("Unsupported method for legacy protocol: {}", method))),
+        };
+
+        // Use the legacy protocol
+        self.legacy_command(&cmd, socket_path).await
+    }
+
+    /// Send a command using the legacy protocol
+    async fn legacy_command(&self, cmd: &str, socket_path: &Path) -> Result<Value, ClientError> {
+        // Connect to the Unix socket
+        let stream = UnixStream::connect(socket_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to '{:?}'. Is Zinit listening on that socket?",
+                    socket_path
+                )
+            })
+            .map_err(|e| ClientError::ConnectionError(e.to_string()))?;
+
+        let mut con = BufStream::new(stream);
+
+        // Send the command
+        con.write_all(cmd.as_bytes()).await?;
+        con.write_all(b"\n").await?;
+        con.flush().await?;
+
+        // Read the response
+        let mut buffer = Vec::new();
+        let mut temp_buf = [0u8; 1024];
+
+        loop {
+            let n = con.read(&mut temp_buf).await?;
+            if n == 0 {
+                break; // Connection closed
+            }
+
+            buffer.extend_from_slice(&temp_buf[..n]);
+
+            // Check if the buffer ends with a newline
+            if buffer.ends_with(b"\n") {
+                break;
+            }
+        }
+
+        // Convert to string and trim the trailing newline
+        let data = String::from_utf8(buffer)
+            .map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
+        let data = data.trim_end();
+
+        // Parse the response
+        let response: ZinitResponse = serde_json::from_str(data)?;
+
+        match response.state {
+            ZinitState::Ok => Ok(response.body),
+            ZinitState::Error => {
+                let err: String = serde_json::from_value(response.body)
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                Err(ClientError::Other(anyhow::anyhow!(err)))
+            }
         }
     }
 
