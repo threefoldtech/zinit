@@ -1,9 +1,8 @@
 extern crate zinit;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{App, Arg};
 use git_version::git_version;
-use std::path::Path;
 use zinit::app::client::Client;
 
 const GIT_VERSION: &str = git_version!(args = ["--tags", "--always", "--dirty=-modified"]);

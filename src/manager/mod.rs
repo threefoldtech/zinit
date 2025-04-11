@@ -170,6 +170,8 @@ impl ProcessManager {
 
         let mut table = self.table.lock().await;
 
+        // FIXME: properly add child to `Child`-struct, so .wait() can be called
+        #[allow(clippy::zombie_processes)]
         let mut child = child
             .group_spawn()
             .context("failed to spawn command")?

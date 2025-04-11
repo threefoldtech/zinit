@@ -4,10 +4,10 @@ use serde_json::{self as encoder, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
 use tokio::net::UnixStream;
 
-use super::server::{Status, ZinitResponse, ZinitState};
+use super::server::Status;
 
 // JSON-RPC 2.0 structures
 #[derive(Debug, Deserialize, Serialize)]
@@ -105,7 +105,7 @@ impl Client {
         let data = data.trim_end();
 
         // Parse the JSON-RPC response - improved error handling
-        let response: JsonRpcResponse = match encoder::from_str(&data) {
+        let response: JsonRpcResponse = match encoder::from_str(data) {
             Ok(response) => response,
             Err(e) => {
                 // If we can't parse the response as JSON-RPC, this is an error
