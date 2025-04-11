@@ -139,6 +139,61 @@ impl Api {
                 Ok(spec)
             }
 
+            // Log method for streaming logs
+            "log" => {
+                let filter = if let Some(params) = &request.params {
+                    params.get("filter").and_then(|v| v.as_str())
+                } else {
+                    None
+                };
+                
+                let snapshot = if let Some(params) = &request.params {
+                    params.get("snapshot").and_then(|v| v.as_bool()).unwrap_or(false)
+                } else {
+                    false
+                };
+                
+                let mut logs = zinit.logs(!snapshot).await;
+                let mut log_data = Vec::new();
+                
+                // A simplified implementation that collects logs with tokio::time::timeout
+                use tokio::time::{timeout, Duration};
+                
+                // For snapshot, wait only a short time; for continuous logs, wait longer
+                let wait_duration = if snapshot {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_secs(5)
+                };
+                
+                loop {
+                    match timeout(wait_duration, logs.recv()).await {
+                        Ok(Some(line)) => {
+                            // Got a log line
+                            if let Some(filter_text) = filter {
+                                if line.contains(filter_text) {
+                                    log_data.push(line.to_string());
+                                }
+                            } else {
+                                log_data.push(line.to_string());
+                            }
+                            
+                            if snapshot && !log_data.is_empty() {
+                                break; // For snapshot mode, get only the first logs
+                            }
+                        },
+                        Ok(None) => break, // Stream ended
+                        Err(_) => break,   // Timeout
+                    }
+                }
+                
+                // Convert to a JSON value - handle potential error explicitly
+                match serde_json::to_value(log_data) {
+                    Ok(value) => Ok(value),
+                    Err(e) => Err(anyhow::anyhow!("Failed to serialize logs: {}", e))
+                }
+            }
+
             // Service management methods
             "service.list" => Api::list(zinit).await,
 
@@ -327,254 +382,137 @@ impl Api {
 
     async fn handle(stream: UnixStream, zinit: ZInit) {
         let mut stream = BufStream::new(stream);
-
-        // First, try to read as a JSON-RPC request
         let mut buffer = Vec::new();
 
-        // Read a small amount first to check if it's JSON
-        let mut peek_buffer = [0u8; 1];
-        match stream.read_exact(&mut peek_buffer).await {
-            Ok(_) => {
-                // Put the peeked byte back into the buffer
-                buffer.push(peek_buffer[0]);
+        // Read the JSON-RPC request
+        let mut temp_buf = [0u8; 1024];
+        loop {
+            match stream.read(&mut temp_buf).await {
+                Ok(0) => break, // Connection closed
+                Ok(n) => {
+                    buffer.extend_from_slice(&temp_buf[..n]);
 
-                // If it starts with '{', it's likely JSON-RPC
-                if peek_buffer[0] == b'{' || peek_buffer[0] == b'[' {
-                    // Read the request until we find a newline or a certain amount of data
-                    // This avoids waiting for EOF which would require the client to close the connection
-                    let mut temp_buf = [0u8; 1024];
-                    loop {
-                        match stream.read(&mut temp_buf).await {
-                            Ok(0) => break, // Connection closed
-                            Ok(n) => {
-                                buffer.extend_from_slice(&temp_buf[..n]);
+                    // Check if we have a complete JSON object/array
+                    // This is a simple heuristic - we count opening and closing braces/brackets
+                    let mut open_braces = 0;
+                    let mut open_brackets = 0;
+                    let mut in_string = false;
+                    let mut escape_next = false;
 
-                                // Check if we have a complete JSON object/array
-                                // This is a simple heuristic - we count opening and closing braces/brackets
-                                let mut open_braces = 0;
-                                let mut open_brackets = 0;
-                                let mut in_string = false;
-                                let mut escape_next = false;
+                    for &b in &buffer {
+                        if escape_next {
+                            escape_next = false;
+                            continue;
+                        }
 
-                                for &b in &buffer {
-                                    if escape_next {
-                                        escape_next = false;
-                                        continue;
-                                    }
-
-                                    match b {
-                                        b'\\' if in_string => escape_next = true,
-                                        b'"' => in_string = !in_string,
-                                        b'{' if !in_string => open_braces += 1,
-                                        b'}' if !in_string => {
-                                            if open_braces > 0 {
-                                                open_braces -= 1;
-                                            }
-                                        }
-                                        b'[' if !in_string => open_brackets += 1,
-                                        b']' if !in_string => {
-                                            if open_brackets > 0 {
-                                                open_brackets -= 1;
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-
-                                // If all braces/brackets are balanced, we have a complete JSON
-                                if open_braces == 0 && open_brackets == 0 && !in_string {
-                                    break;
-                                }
-
-                                // Safety check to prevent buffer from growing too large
-                                if buffer.len() > 1024 * 1024 {
-                                    // 1MB limit
-                                    error!("request too large");
-                                    let _ = stream.write_all("request too large".as_ref()).await;
-                                    return;
+                        match b {
+                            b'\\' if in_string => escape_next = true,
+                            b'"' => in_string = !in_string,
+                            b'{' if !in_string => open_braces += 1,
+                            b'}' if !in_string => {
+                                if open_braces > 0 {
+                                    open_braces -= 1;
                                 }
                             }
-                            Err(err) => {
-                                error!("failed to read request: {}", err);
-                                let _ = stream.write_all("bad request".as_ref()).await;
-                                return;
+                            b'[' if !in_string => open_brackets += 1,
+                            b']' if !in_string => {
+                                if open_brackets > 0 {
+                                    open_brackets -= 1;
+                                }
                             }
+                            _ => {}
                         }
                     }
 
-                    // First, try to parse as a batch request
-                    let batch_request: Result<JsonRpcBatchRequest, _> =
-                        encoder::from_slice(&buffer);
+                    // If all braces/brackets are balanced, we have a complete JSON
+                    if open_braces == 0 && open_brackets == 0 && !in_string {
+                        break;
+                    }
 
-                    match batch_request {
-                        Ok(requests) if !requests.is_empty() => {
-                            // Valid batch request
-                            let mut responses = Vec::with_capacity(requests.len());
-
-                            for req in requests {
-                                let response = if req.jsonrpc != "2.0" {
-                                    // Invalid JSON-RPC version
-                                    JsonRpcResponse {
-                                        jsonrpc: "2.0".to_string(),
-                                        id: req.id.unwrap_or(Value::Null),
-                                        result: None,
-                                        error: Some(JsonRpcError {
-                                            code: INVALID_REQUEST,
-                                            message: "Invalid JSON-RPC version, expected 2.0"
-                                                .to_string(),
-                                            data: None,
-                                        }),
-                                    }
-                                } else {
-                                    // Process the request
-                                    Api::process_jsonrpc(req, zinit.clone()).await
-                                };
-
-                                responses.push(response);
-                            }
-
-                            // Serialize and send the batch response
-                            let value = match encoder::to_vec(&responses) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    error!("failed to serialize batch response: {}", err);
-                                    return;
-                                }
-                            };
-
-                            if let Err(err) = stream.write_all(&value).await {
-                                error!("failed to send batch response to client: {}", err);
-                            };
-
-                            // Add a newline character to indicate the end of the response
-                            if let Err(err) = stream.write_all(b"\n").await {
-                                error!("failed to send newline: {}", err);
-                            };
-
-                            let _ = stream.flush().await;
-                            return;
-                        }
-                        Ok(_) => {
-                            // Empty batch, return error
-                            let response = JsonRpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: Value::Null,
-                                result: None,
-                                error: Some(JsonRpcError {
-                                    code: INVALID_REQUEST,
-                                    message: "Invalid Request: Empty batch".to_string(),
-                                    data: None,
-                                }),
-                            };
-
-                            let value = match encoder::to_vec(&response) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    error!("failed to serialize response: {}", err);
-                                    return;
-                                }
-                            };
-
-                            if let Err(err) = stream.write_all(&value).await {
-                                error!("failed to send response to client: {}", err);
-                            };
-
-                            // Add a newline character to indicate the end of the response
-                            if let Err(err) = stream.write_all(b"\n").await {
-                                error!("failed to send newline: {}", err);
-                            };
-
-                            let _ = stream.flush().await;
-                            return;
-                        }
-                        Err(_) => {
-                            // Not a batch request, try as a single request
-                            let request: Result<JsonRpcRequest, _> = encoder::from_slice(&buffer);
-
-                            match request {
-                                Ok(req) => {
-                                    // Valid JSON-RPC request
-                                    let response = if req.jsonrpc != "2.0" {
-                                        // Invalid JSON-RPC version
-                                        JsonRpcResponse {
-                                            jsonrpc: "2.0".to_string(),
-                                            id: req.id.unwrap_or(Value::Null),
-                                            result: None,
-                                            error: Some(JsonRpcError {
-                                                code: INVALID_REQUEST,
-                                                message: "Invalid JSON-RPC version, expected 2.0"
-                                                    .to_string(),
-                                                data: None,
-                                            }),
-                                        }
-                                    } else {
-                                        // Process the request
-                                        Api::process_jsonrpc(req, zinit).await
-                                    };
-
-                                    // Serialize and send the response
-                                    let value = match encoder::to_vec(&response) {
-                                        Ok(value) => value,
-                                        Err(err) => {
-                                            error!("failed to serialize response: {}", err);
-                                            return;
-                                        }
-                                    };
-
-                                    if let Err(err) = stream.write_all(&value).await {
-                                        error!("failed to send response to client: {}", err);
-                                    };
-
-                                    // Add a newline character to indicate the end of the response
-                                    if let Err(err) = stream.write_all(b"\n").await {
-                                        error!("failed to send newline: {}", err);
-                                    };
-
-                                    let _ = stream.flush().await;
-                                    return;
-                                }
-                                Err(_) => {
-                                    // Not a valid JSON-RPC request, try the line-based protocol
-                                }
-                            }
-                        }
+                    // Safety check to prevent buffer from growing too large
+                    if buffer.len() > 1024 * 1024 {
+                        // 1MB limit
+                        error!("request too large");
+                        let _ = stream.write_all("request too large".as_ref()).await;
+                        return;
                     }
                 }
-
-                // If we get here, it's not a JSON-RPC request
-                // Try the line-based protocol
-                let mut cmd = String::from_utf8_lossy(&buffer).to_string();
-
-                // Read the rest of the line
-                let mut line = String::new();
-                if let Err(err) = stream.read_line(&mut line).await {
-                    error!("failed to read command: {}", err);
+                Err(err) => {
+                    error!("failed to read request: {}", err);
                     let _ = stream.write_all("bad request".as_ref()).await;
                     return;
                 }
+            }
+        }
 
-                // Combine the peeked byte with the rest of the line
-                cmd.push_str(&line);
+        // First, try to parse as a batch request
+        let batch_request: Result<JsonRpcBatchRequest, _> = encoder::from_slice(&buffer);
 
-                // Process using the old line-based protocol
-                let response = match Api::process(cmd, &mut stream, zinit).await {
-                    // When process returns None means we can terminate without
-                    // writing any result to the socket.
-                    Ok(None) => return,
-                    Ok(Some(body)) => ZinitResponse {
-                        body,
-                        state: ZinitState::Ok,
-                    },
-                    Err(err) => ZinitResponse {
-                        state: ZinitState::Error,
-                        body: encoder::to_value(format!("{}", err)).unwrap(),
-                    },
+        match batch_request {
+            Ok(requests) if !requests.is_empty() => {
+                // Valid batch request
+                let mut responses = Vec::with_capacity(requests.len());
+
+                for req in requests {
+                    let response = if req.jsonrpc != "2.0" {
+                        // Invalid JSON-RPC version
+                        JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: req.id.unwrap_or(Value::Null),
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: INVALID_REQUEST,
+                                message: "Invalid JSON-RPC version, expected 2.0"
+                                    .to_string(),
+                                data: None,
+                            }),
+                        }
+                    } else {
+                        // Process the request
+                        Api::process_jsonrpc(req, zinit.clone()).await
+                    };
+
+                    responses.push(response);
+                }
+
+                // Serialize and send the batch response
+                let value = match encoder::to_vec(&responses) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        error!("failed to serialize batch response: {}", err);
+                        return;
+                    }
                 };
 
+                if let Err(err) = stream.write_all(&value).await {
+                    error!("failed to send batch response to client: {}", err);
+                };
+
+                // Add a newline character to indicate the end of the response
+                if let Err(err) = stream.write_all(b"\n").await {
+                    error!("failed to send newline: {}", err);
+                };
+
+                let _ = stream.flush().await;
+            }
+            Ok(_) => {
+                // Empty batch, return error
+                let response = JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: Value::Null,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: INVALID_REQUEST,
+                        message: "Invalid Request: Empty batch".to_string(),
+                        data: None,
+                    }),
+                };
+
+                // Serialize and send the response
                 let value = match encoder::to_vec(&response) {
                     Ok(value) => value,
                     Err(err) => {
-                        debug!("failed to create response: {}", err);
+                        error!("failed to serialize response: {}", err);
                         return;
                     }
                 };
@@ -590,64 +528,90 @@ impl Api {
 
                 let _ = stream.flush().await;
             }
-            Err(err) => {
-                error!("failed to read request: {}", err);
-                let _ = stream.write_all("bad request".as_ref()).await;
+            Err(_) => {
+                // Not a batch request, try as a single request
+                let request: Result<JsonRpcRequest, _> = encoder::from_slice(&buffer);
+
+                match request {
+                    Ok(req) => {
+                        // Valid JSON-RPC request
+                        let response = if req.jsonrpc != "2.0" {
+                            // Invalid JSON-RPC version
+                            JsonRpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: req.id.unwrap_or(Value::Null),
+                                result: None,
+                                error: Some(JsonRpcError {
+                                    code: INVALID_REQUEST,
+                                    message: "Invalid JSON-RPC version, expected 2.0"
+                                        .to_string(),
+                                    data: None,
+                                }),
+                            }
+                        } else {
+                            // Process the request
+                            Api::process_jsonrpc(req, zinit).await
+                        };
+
+                        // Serialize and send the response
+                        let value = match encoder::to_vec(&response) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                error!("failed to serialize response: {}", err);
+                                return;
+                            }
+                        };
+
+                        if let Err(err) = stream.write_all(&value).await {
+                            error!("failed to send response to client: {}", err);
+                        };
+
+                        // Add a newline character to indicate the end of the response
+                        if let Err(err) = stream.write_all(b"\n").await {
+                            error!("failed to send newline: {}", err);
+                        };
+
+                        let _ = stream.flush().await;
+                    }
+                    Err(_) => {
+                        // Invalid JSON, return error
+                        let response = JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: Value::Null,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: INVALID_REQUEST,
+                                message: "Invalid JSON in request".to_string(),
+                                data: None,
+                            }),
+                        };
+
+                        // Serialize and send the response
+                        let value = match encoder::to_vec(&response) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                error!("failed to serialize response: {}", err);
+                                return;
+                            }
+                        };
+
+                        if let Err(err) = stream.write_all(&value).await {
+                            error!("failed to send response to client: {}", err);
+                        };
+
+                        // Add a newline character to indicate the end of the response
+                        if let Err(err) = stream.write_all(b"\n").await {
+                            error!("failed to send newline: {}", err);
+                        };
+
+                        let _ = stream.flush().await;
+                    }
+                }
             }
         }
     }
 
-    async fn process(
-        cmd: String,
-        stream: &mut BufStream<UnixStream>,
-        zinit: ZInit,
-    ) -> Result<Option<Value>> {
-        let parts = match shlex::split(&cmd) {
-            Some(parts) => parts,
-            None => bail!("invalid command syntax"),
-        };
-
-        if parts.is_empty() {
-            bail!("unknown command");
-        }
-
-        if &parts[0] == "log" {
-            match parts.len() {
-                1 => Api::log(stream, zinit, true).await,
-                2 if parts[1] == "snapshot" => Api::log(stream, zinit, false).await,
-                _ => bail!("invalid log command arguments"),
-            }?;
-
-            return Ok(None);
-        }
-
-        let value = match parts[0].as_ref() {
-            "list" => Api::list(zinit).await,
-            "shutdown" => Api::shutdown(zinit).await,
-            "reboot" => Api::reboot(zinit).await,
-            "start" if parts.len() == 2 => Api::start(&parts[1], zinit).await,
-            "stop" if parts.len() == 2 => Api::stop(&parts[1], zinit).await,
-            "kill" if parts.len() == 3 => Api::kill(&parts[1], &parts[2], zinit).await,
-            "status" if parts.len() == 2 => Api::status(&parts[1], zinit).await,
-            "forget" if parts.len() == 2 => Api::forget(&parts[1], zinit).await,
-            "monitor" if parts.len() == 2 => Api::monitor(&parts[1], zinit).await,
-            _ => bail!("unknown command '{}' or wrong arguments count", parts[0]),
-        }?;
-
-        Ok(Some(value))
-    }
-
-    async fn log(stream: &mut BufStream<UnixStream>, zinit: ZInit, follow: bool) -> Result<Value> {
-        let mut logs = zinit.logs(follow).await;
-
-        while let Some(line) = logs.recv().await {
-            stream.write_all(line.as_bytes()).await?;
-            stream.write_all(b"\n").await?;
-            stream.flush().await?;
-        }
-
-        Ok(Value::Null)
-    }
+    // Helper functions for legacy protocol removed
 
     async fn list(zinit: ZInit) -> Result<Value> {
         let services = zinit.list().await?;
