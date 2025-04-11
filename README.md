@@ -1,71 +1,92 @@
-# Zinit [![Rust](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml/badge.svg)](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml)
+# Zinit
 
-A lightweight PID 1 replacement inspired by runit, written in Rust using Tokio for async I/O.
+Zinit is a lightweight init system and process manager written in Rust, designed to serve as a PID 1 replacement with inspiration from runit. It focuses on essential service management functionality without the complexity of larger init systems.
 
-## Overview
+## Features
 
-Zinit is a service manager designed to be simple, lightweight, and reliable for both system services and container environments. It acts as an init system (PID 1) but focuses only on essential service management functionality.
-
-### Key Features
-
-- **Service Management**: Ensures configured services are up and running at all times
-- **Dependency Handling**: Supports service dependencies for proper startup ordering
-- **Simple Control Interface**: Provides an intuitive CLI to add, start, stop, and monitor services
-- **Container Support**: Can run in container mode with appropriate signal handling
-- **Configurable Logging**: Multiple logging options including ringbuffer and stdout
-
-## Documentation
-
-Comprehensive documentation is available in the [docs](docs) directory:
-
-- [Command Line Interface](docs/readme.md)
-- [Implementation Details](docs/implementation.md)
-- [API Protocol](docs/protocol.md)
+- **Lightweight**: Minimal resource footprint, perfect for containers and embedded systems
+- **Service Management**: Monitors and maintains service states
+- **Dependency Handling**: Manages proper service startup ordering
+- **JSON-RPC API**: Modern, structured interface for programmatic control
+- **Multiple Clients**: Command-line, library, and HTTP access options
+- **Flexible Logging**: Multiple logging options including ringbuffer and stdout
 
 ## Quick Start
 
-### Installation
+### Local Installation
 
 ```bash
 # Build from source
 make
 
-# Install the binary
-sudo cp target/x86_64-unknown-linux-musl/release/zinit /usr/local/bin/
+# Install the binaries
+sudo cp target/x86_64-unknown-linux-musl/zinit /usr/local/bin/
+sudo cp target/x86_64-unknown-linux-musl/zinit-http /usr/local/bin/  # Optional HTTP proxy
 ```
 
-### Testing with Docker
-
-To quickly try zinit in a container environment:
+### Using Docker
 
 ```bash
 # Build the test docker image
 make docker
 
-# Run the container
+# Run the container with Zinit as init
 docker run -dt --device=/dev/kmsg:/dev/kmsg:rw zinit
 ```
+> Don't forget to `-p <XXXX>:<YYYY>` flag when running with Docker if you want to forward the HTTP proxy to your host.
 
-The test image automatically starts Redis and OpenSSH services.
+## Basic Usage
 
-## Building from Source
+### Service Configuration
 
-### Requirements
+Create service files in `/etc/zinit/` (default config directory):
 
-- Rust (cargo) - version 1.46.0 or later
-- musl and musl-tools packages
-- GNU Make
+```yaml
+# /etc/zinit/my-service.yaml
+exec: "/usr/bin/my-service --option value"
+oneshot: false
+after:
+  - dependency-service
+```
 
-### Build Instructions
+### Command Line
 
 ```bash
-# Standard build
-make
+# List all services
+zinit list
 
-# For development/debug
-make dev
+# Monitor service
+zinit monitor my-service
+
+# Check service status
+zinit status my-service
+
+# Start/stop services
+zinit start my-service
+zinit stop my-service
 ```
+
+### Using JSON-RPC
+
+```bash
+# Example: listing services using the HTTP-proxy
+curl -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"service.list","params":[]}' \
+  http://localhost:8080/
+```
+
+## Documentation
+
+For more detailed documentation, see:
+
+- [Quick Start Guide](docs/quickstart.md) - Get up and running quickly
+- [API Documentation](docs/api.md) - JSON-RPC API reference
+- [JSON-RPC Usage](docs/json-rpc-usage.md) - Detailed guide with examples
+- [Configuration](docs/configuration.md) - Service configuration format
+- [HTTP Proxy](docs/zinit-http.md) - Using the zinit-http component
+- [Client Library](zinit-client/README.md) - Using the Rust client library
+- [Configuration](docs/configuration.md) - Service configuration format
 
 ## License
 
-See [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
