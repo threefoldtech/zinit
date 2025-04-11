@@ -104,16 +104,25 @@ impl Client {
         let data = String::from_utf8(buffer)?;
         let data = data.trim_end();
 
-        // Parse the JSON-RPC response
-        let response: JsonRpcResponse = encoder::from_str(data)?;
+        // Parse the JSON-RPC response - improved error handling
+        let response: JsonRpcResponse = match encoder::from_str(&data) {
+            Ok(response) => response,
+            Err(e) => {
+                // If we can't parse the response as JSON-RPC, this is an error
+                error!("Failed to parse JSON-RPC response: {}", e);
+                error!("Raw response: {}", data);
+                bail!("Invalid response from server: failed to parse JSON-RPC")
+            }
+        };
 
-        // Handle the response
+        // Handle the response according to JSON-RPC 2.0 spec
         if let Some(error) = response.error {
+            // Error response - has 'error' field
             bail!("RPC error ({}): {}", error.code, error.message);
-        } else if let Some(result) = response.result {
-            Ok(result)
         } else {
-            bail!("Invalid JSON-RPC response: missing both result and error");
+            // Success response - return result (which might be null)
+            // This properly handles all success responses including null values
+            Ok(response.result.unwrap_or(Value::Null))
         }
     }
 

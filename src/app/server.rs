@@ -87,16 +87,26 @@ pub struct Status {
 pub struct Api {
     zinit: ZInit,
     socket: PathBuf,
-    // http_port removed as it's now in a separate binary
+    config_dir: PathBuf,  // Configuration directory path
 }
 
 impl Api {
     pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P, _http_port: Option<u16>) -> Api {
         // _http_port parameter kept for backward compatibility but not used
+        // Default to /etc/zinit if not specified
+        let config_dir = PathBuf::from("/etc/zinit");
+        
         Api {
             zinit,
             socket: socket.as_ref().to_path_buf(),
+            config_dir,
         }
+    }
+
+    // Add a way to explicitly set the config directory
+    pub fn with_config_dir<P: AsRef<Path>>(mut self, config_dir: P) -> Self {
+        self.config_dir = config_dir.as_ref().to_path_buf();
+        self
     }
 
     // HTTP proxy functionality has been moved to a separate binary (zinit-http)
@@ -625,8 +635,11 @@ impl Api {
     }
 
     async fn monitor<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
+        // Use the existing working directory which should be set to the config dir
+        // when Zinit is started with the -c flag (default /etc/zinit)
         let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
             .context("failed to load service config")?;
+        
         zinit.monitor(name, service).await?;
         Ok(Value::Null)
     }
@@ -712,11 +725,11 @@ impl Api {
             bail!("Invalid service name: must not contain '/', '\\', or '.'");
         }
 
-        // Construct the file path
-        let file_path = PathBuf::from(format!("{}.yaml", name));
+        // Use the daemon's working directory which should be the config dir
+        let file_path = format!("{}.yaml", name);
 
         // Check if the service file already exists
-        if file_path.exists() {
+        if Path::new(&file_path).exists() {
             bail!("Service '{}' already exists", name);
         }
 
@@ -745,11 +758,11 @@ impl Api {
             bail!("Invalid service name: must not contain '/', '\\', or '.'");
         }
 
-        // Construct the file path
-        let file_path = PathBuf::from(format!("{}.yaml", name));
+        // Use the daemon's working directory which should be the config dir
+        let file_path = format!("{}.yaml", name);
 
         // Check if the service file exists
-        if !file_path.exists() {
+        if !Path::new(&file_path).exists() {
             bail!("Service '{}' not found", name);
         }
 
@@ -772,11 +785,11 @@ impl Api {
             bail!("Invalid service name: must not contain '/', '\\', or '.'");
         }
 
-        // Construct the file path
-        let file_path = PathBuf::from(format!("{}.yaml", name));
+        // Use the daemon's working directory which should be the config dir
+        let file_path = format!("{}.yaml", name);
 
         // Check if the service file exists
-        if !file_path.exists() {
+        if !Path::new(&file_path).exists() {
             bail!("Service '{}' not found", name);
         }
 

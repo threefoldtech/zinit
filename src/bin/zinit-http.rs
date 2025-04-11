@@ -265,14 +265,8 @@ async fn run_http_server(socket: &str, port: u16) -> Result<()> {
                             .and_then(|p| p.get("name"))
                             .and_then(|v| v.as_str())
                         {
-                            // For monitoring, we need to check if the service file exists first
-                            let file_path = format!("{}.yaml", name);
-                            if !std::path::Path::new(&file_path).exists() {
-                                return Err((
-                                    StatusCode::BAD_REQUEST,
-                                    format!("Service file '{}' not found", file_path),
-                                ));
-                            }
+                            // We don't need to manually check for file existence here as the zinit daemon will handle it
+                            // The actual path resolution is handled properly by the daemon in the monitor method
 
                             // Now we can call monitor
                             client.monitor(name).await.map_err(|e| {
