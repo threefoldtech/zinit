@@ -149,7 +149,7 @@ impl Client {
 
         // Make a JSON-RPC request to the log method
         let response = self.jsonrpc_request("log", Some(params)).await?;
-        
+
         // Write the log data to the output
         if let Some(logs) = response.as_array() {
             for log in logs {
@@ -161,7 +161,7 @@ impl Client {
         } else if let Some(log_str) = response.as_str() {
             out.write_all(log_str.as_bytes()).await?;
         }
-        
+
         Ok(())
     }
 

@@ -87,7 +87,7 @@ pub struct Status {
 pub struct Api {
     zinit: ZInit,
     socket: PathBuf,
-    config_dir: PathBuf,  // Configuration directory path
+    config_dir: PathBuf, // Configuration directory path
 }
 
 impl Api {
@@ -95,7 +95,7 @@ impl Api {
         // _http_port parameter kept for backward compatibility but not used
         // Default to /etc/zinit if not specified
         let config_dir = PathBuf::from("/etc/zinit");
-        
+
         Api {
             zinit,
             socket: socket.as_ref().to_path_buf(),
@@ -156,26 +156,29 @@ impl Api {
                 } else {
                     None
                 };
-                
+
                 let snapshot = if let Some(params) = &request.params {
-                    params.get("snapshot").and_then(|v| v.as_bool()).unwrap_or(false)
+                    params
+                        .get("snapshot")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
                 } else {
                     false
                 };
-                
+
                 let mut logs = zinit.logs(!snapshot).await;
                 let mut log_data = Vec::new();
-                
+
                 // A simplified implementation that collects logs with tokio::time::timeout
                 use tokio::time::{timeout, Duration};
-                
+
                 // For snapshot, wait only a short time; for continuous logs, wait longer
                 let wait_duration = if snapshot {
                     Duration::from_millis(500)
                 } else {
                     Duration::from_secs(5)
                 };
-                
+
                 loop {
                     match timeout(wait_duration, logs.recv()).await {
                         Ok(Some(line)) => {
@@ -187,20 +190,20 @@ impl Api {
                             } else {
                                 log_data.push(line.to_string());
                             }
-                            
+
                             if snapshot && !log_data.is_empty() {
                                 break; // For snapshot mode, get only the first logs
                             }
-                        },
+                        }
                         Ok(None) => break, // Stream ended
                         Err(_) => break,   // Timeout
                     }
                 }
-                
+
                 // Convert to a JSON value - handle potential error explicitly
                 match serde_json::to_value(log_data) {
                     Ok(value) => Ok(value),
-                    Err(e) => Err(anyhow::anyhow!("Failed to serialize logs: {}", e))
+                    Err(e) => Err(anyhow::anyhow!("Failed to serialize logs: {}", e)),
                 }
             }
 
@@ -472,8 +475,7 @@ impl Api {
                             result: None,
                             error: Some(JsonRpcError {
                                 code: INVALID_REQUEST,
-                                message: "Invalid JSON-RPC version, expected 2.0"
-                                    .to_string(),
+                                message: "Invalid JSON-RPC version, expected 2.0".to_string(),
                                 data: None,
                             }),
                         }
@@ -553,8 +555,7 @@ impl Api {
                                 result: None,
                                 error: Some(JsonRpcError {
                                     code: INVALID_REQUEST,
-                                    message: "Invalid JSON-RPC version, expected 2.0"
-                                        .to_string(),
+                                    message: "Invalid JSON-RPC version, expected 2.0".to_string(),
                                     data: None,
                                 }),
                             }
@@ -639,7 +640,7 @@ impl Api {
         // when Zinit is started with the -c flag (default /etc/zinit)
         let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
             .context("failed to load service config")?;
-        
+
         zinit.monitor(name, service).await?;
         Ok(Value::Null)
     }
