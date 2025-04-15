@@ -157,30 +157,17 @@ impl Api {
                     None
                 };
 
-                let snapshot = if let Some(params) = &request.params {
-                    params
-                        .get("snapshot")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
-
-                let mut logs = zinit.logs(!snapshot).await;
+                // Always fetch a snapshot, ignore client's 'snapshot' parameter
+                let mut logs = zinit.logs(false).await; // Request snapshot
                 let mut log_data = Vec::new();
 
-                // A simplified implementation that collects logs with tokio::time::timeout
+                // Use a short timeout to collect available logs from the snapshot receiver
                 use tokio::time::{timeout, Duration};
-
-                // For snapshot, wait only a short time; for continuous logs, wait longer
-                let wait_duration = if snapshot {
-                    Duration::from_millis(500)
-                } else {
-                    Duration::from_secs(5)
-                };
+                const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(500); // Short timeout for snapshot
 
                 loop {
-                    match timeout(wait_duration, logs.recv()).await {
+                    // Use the fixed short timeout
+                    match timeout(SNAPSHOT_TIMEOUT, logs.recv()).await {
                         Ok(Some(line)) => {
                             // Got a log line
                             if let Some(filter_text) = filter {
@@ -191,9 +178,7 @@ impl Api {
                                 log_data.push(line.to_string());
                             }
 
-                            if snapshot && !log_data.is_empty() {
-                                break; // For snapshot mode, get only the first logs
-                            }
+                            // No need for the specific snapshot break condition anymore
                         }
                         Ok(None) => break, // Stream ended
                         Err(_) => break,   // Timeout
