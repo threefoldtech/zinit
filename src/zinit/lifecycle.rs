@@ -17,6 +17,7 @@ impl WaitStatusExt for WaitStatus {
     }
 }
 use anyhow::Result;
+use jsonrpsee::tracing::{debug, error, info};
 use nix::sys::reboot::RebootMode;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;

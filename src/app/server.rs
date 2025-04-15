@@ -1,55 +1,26 @@
-use crate::zinit::{config, ZInit};
-use anyhow::{bail, Context, Result};
+use crate::zinit::{config, ZInit, State as ZinitInternalState};
+use crate::app::api_trait::{
+    ZinitRpcApiServer, ZinitServiceApiServer, ZinitSystemApiServer, /* ZinitLoggingApiServer, */ RpcResult, // Keep logging trait commented out
+};
+// use crate::app::api_trait::ZinitLoggingApiServer; // Keep commented out
+use crate::app::types::Status; // Use Status from the types module
+use anyhow::{Context, Result};
+use jsonrpsee::{
+    server::{ServerBuilder, ServerHandle, RpcModule },
+    types::{ErrorObjectOwned, Params},
+};
+use log::{info, error, warn}; // Use log crate macros
 use nix::sys::signal;
-use serde::{Deserialize, Serialize};
-use serde_json::{self as encoder, Value};
+use serde_json::{self, Value, Map};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::str::FromStr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::{UnixListener, UnixStream};
 
-// Include the OpenRPC specification
+// Include the OpenRPC specification - still needed for the discover method
 const OPENRPC_SPEC: &str = include_str!("../../openrpc.json");
 
-// JSON-RPC 2.0 structures
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
-    params: Option<Value>,
-}
-
-// Type alias for batch requests
-type JsonRpcBatchRequest = Vec<JsonRpcRequest>;
-
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcError {
-    code: i32,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
-}
-
-// JSON-RPC error codes
-// Standard JSON-RPC error codes
-const INVALID_REQUEST: i32 = -32600;
-const METHOD_NOT_FOUND: i32 = -32601;
-const INVALID_PARAMS: i32 = -32602;
-const INTERNAL_ERROR: i32 = -32603;
-
-// Custom error codes for Zinit
+// Custom error codes for Zinit (can be mapped to ErrorObjectOwned)
 const SERVICE_NOT_FOUND: i32 = -32000;
 const SERVICE_ALREADY_MONITORED: i32 = -32001;
 const SERVICE_IS_UP: i32 = -32002;
@@ -60,735 +31,373 @@ const SHUTTING_DOWN: i32 = -32006;
 const SERVICE_ALREADY_EXISTS: i32 = -32007;
 const SERVICE_FILE_ERROR: i32 = -32008;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub struct ZinitResponse {
-    pub state: ZinitState,
-    pub body: Value,
+// Helper to convert anyhow::Error to jsonrpsee::types::ErrorObjectOwned
+fn to_rpc_error(err: anyhow::Error) -> ErrorObjectOwned {
+    // Attempt to map specific Zinit errors to codes
+    let code = if err.to_string().contains("service name") && err.to_string().contains("unknown") {
+        SERVICE_NOT_FOUND
+    } else if err.to_string().contains("already monitored") {
+        SERVICE_ALREADY_MONITORED
+    } else if err.to_string().contains("service") && err.to_string().contains("is up") {
+        SERVICE_IS_UP
+    } else if err.to_string().contains("service") && err.to_string().contains("is down") {
+        SERVICE_IS_DOWN
+    } else if err.to_string().contains("signal") {
+        INVALID_SIGNAL
+    } else if err.to_string().contains("config") {
+        CONFIG_ERROR
+    } else if err.to_string().contains("shutting down") {
+        SHUTTING_DOWN
+    } else if err.to_string().contains("Service") && err.to_string().contains("already exists") {
+        SERVICE_ALREADY_EXISTS
+    } else if err.to_string().contains("Failed to") && (err.to_string().contains("service file") || err.to_string().contains("configuration")) {
+        SERVICE_FILE_ERROR
+    } else {
+        jsonrpsee::types::error::INTERNAL_ERROR_CODE // Default to internal error
+    };
+
+    ErrorObjectOwned::owned(code, err.to_string(), None::<()>)
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ZinitState {
-    Ok,
-    Error,
-}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub struct Status {
-    pub name: String,
-    pub pid: u32,
-    pub state: String,
-    pub target: String,
-    pub after: HashMap<String, String>,
-}
-
+#[derive(Clone)] // Api needs to be Clone to be used with jsonrpsee server
 pub struct Api {
     zinit: ZInit,
-    socket: PathBuf,
-    config_dir: PathBuf, // Configuration directory path
+    config_dir: PathBuf, // Keep config dir if needed for service file operations
 }
 
 impl Api {
-    pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P, _http_port: Option<u16>) -> Api {
-        // _http_port parameter kept for backward compatibility but not used
-        // Default to /etc/zinit if not specified
-        let config_dir = PathBuf::from("/etc/zinit");
-
-        Api {
-            zinit,
-            socket: socket.as_ref().to_path_buf(),
-            config_dir,
-        }
+    // Simplified constructor
+    pub fn new(zinit: ZInit, config_dir: PathBuf) -> Self {
+        Api { zinit, config_dir }
     }
 
-    // Add a way to explicitly set the config directory
-    pub fn with_config_dir<P: AsRef<Path>>(mut self, config_dir: P) -> Self {
-        self.config_dir = config_dir.as_ref().to_path_buf();
-        self
+    // Start the jsonrpsee server (HTTP & WS)
+    pub async fn serve(
+        self,
+        http_addr: SocketAddr,
+        ws_addr: SocketAddr,
+    ) -> Result<(ServerHandle, SocketAddr, SocketAddr)> {
+        let server = ServerBuilder::default()
+            .http_only() // Start with HTTP only builder
+            .build(http_addr)
+            .await
+            .context("Failed to build HTTP server")?;
+
+        let ws_server = ServerBuilder::default()
+            .ws_only() // Start with WS only builder
+            .build(ws_addr)
+            .await
+            .context("Failed to build WebSocket server")?;
+
+        let http_bound_addr = server.local_addr()?;
+        let ws_bound_addr = ws_server.local_addr()?;
+
+        let mut module = RpcModule::new(self.clone()); // Use self directly as context
+
+        // Merge methods from all API traits into the module
+        module.merge(ZinitRpcApiServer::into_rpc(self.clone()))?;
+        module.merge(ZinitServiceApiServer::into_rpc(self.clone()))?;
+        module.merge(ZinitSystemApiServer::into_rpc(self.clone()))?;
+        // module.merge(ZinitLoggingApiServer::into_rpc(self.clone()))?; // Keep commented out
+
+        // server.start() returns ServerHandle directly
+        let handle = server.start(module.clone());
+        let ws_handle = ws_server.start(module); // Note: This starts a *separate* server instance with the same methods
+
+        info!("HTTP JSON-RPC server listening on {}", http_bound_addr);
+        info!("WebSocket JSON-RPC server listening on {}", ws_bound_addr);
+
+        // We might want to return both handles or manage them together
+        // For now, returning the first handle and both addresses
+        Ok((handle, http_bound_addr, ws_bound_addr))
     }
 
-    // HTTP proxy functionality has been moved to a separate binary (zinit-http)
+    // --- Helper functions adapted from old implementation ---
+    // These are now private helpers called by the trait implementations below
 
-    pub async fn serve(&self) -> Result<()> {
-        // HTTP proxy functionality has been moved to a separate binary (zinit-http)
-
-        // Start Unix socket server
-        let listener = UnixListener::bind(&self.socket).context("failed to listen for socket")?;
-        loop {
-            if let Ok((stream, _addr)) = listener.accept().await {
-                tokio::spawn(Api::handle(stream, self.zinit.clone()));
-            }
-        }
-    }
-
-    // Process a JSON-RPC request and return a JSON-RPC response
-    async fn process_jsonrpc(request: JsonRpcRequest, zinit: ZInit) -> JsonRpcResponse {
-        let id = request.id.unwrap_or(Value::Null);
-
-        // Process the request based on the method
-        let result = match request.method.as_str() {
-            // Obtain the OpenRPC specification
-            "rpc.discover" => {
-                let spec: Value = match serde_json::from_str(OPENRPC_SPEC) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        return JsonRpcResponse {
-                            jsonrpc: "2.0".to_string(),
-                            id,
-                            result: None,
-                            error: Some(JsonRpcError {
-                                code: INTERNAL_ERROR,
-                                message: format!("Failed to parse OpenRPC spec: {}", err),
-                                data: None,
-                            }),
-                        };
-                    }
-                };
-                Ok(spec)
-            }
-
-            // Log method for streaming logs
-            "log" => {
-                let filter = if let Some(params) = &request.params {
-                    params.get("filter").and_then(|v| v.as_str())
-                } else {
-                    None
-                };
-
-                // Always fetch a snapshot, ignore client's 'snapshot' parameter
-                let mut logs = zinit.logs(false).await; // Request snapshot
-                let mut log_data = Vec::new();
-
-                // Use a short timeout to collect available logs from the snapshot receiver
-                use tokio::time::{timeout, Duration};
-                const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(500); // Short timeout for snapshot
-
-                loop {
-                    // Use the fixed short timeout
-                    match timeout(SNAPSHOT_TIMEOUT, logs.recv()).await {
-                        Ok(Some(line)) => {
-                            // Got a log line
-                            if let Some(filter_text) = filter {
-                                if line.contains(filter_text) {
-                                    log_data.push(line.to_string());
-                                }
-                            } else {
-                                log_data.push(line.to_string());
-                            }
-
-                            // No need for the specific snapshot break condition anymore
-                        }
-                        Ok(None) => break, // Stream ended
-                        Err(_) => break,   // Timeout
-                    }
-                }
-
-                // Convert to a JSON value - handle potential error explicitly
-                match serde_json::to_value(log_data) {
-                    Ok(value) => Ok(value),
-                    Err(e) => Err(anyhow::anyhow!("Failed to serialize logs: {}", e)),
-                }
-            }
-
-            // Service management methods
-            "service.list" => Api::list(zinit).await,
-
-            "service.status" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::status(name, zinit).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.start" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::start(name, zinit).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.stop" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::stop(name, zinit).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.monitor" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::monitor(name, zinit).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.forget" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::forget(name, zinit).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.kill" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        if let Some(signal) = params.get("signal").and_then(|v| v.as_str()) {
-                            Api::kill(name, signal, zinit).await
-                        } else {
-                            Err(anyhow::anyhow!("Missing or invalid 'signal' parameter"))
-                        }
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            // System operations
-            "system.shutdown" => Api::shutdown(zinit).await,
-            "system.reboot" => Api::reboot(zinit).await,
-
-            // Service file operations
-            "service.create" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        if let Some(content) = params.get("content").and_then(|v| v.as_object()) {
-                            Api::create_service(name, content).await
-                        } else {
-                            Err(anyhow::anyhow!("Missing or invalid 'content' parameter"))
-                        }
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.delete" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::delete_service(name).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            "service.get" => {
-                if let Some(params) = &request.params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Api::get_service(name).await
-                    } else {
-                        Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Missing parameters"))
-                }
-            }
-
-            // Unknown method
-            _ => Err(anyhow::anyhow!("Method not found: {}", request.method)),
-        };
-
-        // Create the response
-        match result {
-            Ok(value) => JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: Some(value),
-                error: None,
-            },
-            Err(err) => {
-                // Map error messages to specific error codes
-                let code = if err.to_string().contains("Method not found") {
-                    METHOD_NOT_FOUND
-                } else if err.to_string().contains("Missing or invalid") {
-                    INVALID_PARAMS
-                } else if err.to_string().contains("service name")
-                    && err.to_string().contains("unknown")
-                {
-                    SERVICE_NOT_FOUND
-                } else if err.to_string().contains("already monitored") {
-                    SERVICE_ALREADY_MONITORED
-                } else if err.to_string().contains("service") && err.to_string().contains("is up") {
-                    SERVICE_IS_UP
-                } else if err.to_string().contains("service") && err.to_string().contains("is down")
-                {
-                    SERVICE_IS_DOWN
-                } else if err.to_string().contains("signal") {
-                    INVALID_SIGNAL
-                } else if err.to_string().contains("config") {
-                    CONFIG_ERROR
-                } else if err.to_string().contains("shutting down") {
-                    SHUTTING_DOWN
-                } else if err.to_string().contains("Service")
-                    && err.to_string().contains("already exists")
-                {
-                    SERVICE_ALREADY_EXISTS
-                } else if err.to_string().contains("Failed to")
-                    && (err.to_string().contains("service file")
-                        || err.to_string().contains("configuration"))
-                {
-                    SERVICE_FILE_ERROR
-                } else {
-                    INTERNAL_ERROR
-                };
-
-                JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id,
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code,
-                        message: err.to_string(),
-                        data: None,
-                    }),
-                }
-            }
-        }
-    }
-
-    async fn handle(stream: UnixStream, zinit: ZInit) {
-        let mut stream = BufStream::new(stream);
-        let mut buffer = Vec::new();
-
-        // Read the JSON-RPC request
-        let mut temp_buf = [0u8; 1024];
-        loop {
-            match stream.read(&mut temp_buf).await {
-                Ok(0) => break, // Connection closed
-                Ok(n) => {
-                    buffer.extend_from_slice(&temp_buf[..n]);
-
-                    // Check if we have a complete JSON object/array
-                    // This is a simple heuristic - we count opening and closing braces/brackets
-                    let mut open_braces = 0;
-                    let mut open_brackets = 0;
-                    let mut in_string = false;
-                    let mut escape_next = false;
-
-                    for &b in &buffer {
-                        if escape_next {
-                            escape_next = false;
-                            continue;
-                        }
-
-                        match b {
-                            b'\\' if in_string => escape_next = true,
-                            b'"' => in_string = !in_string,
-                            b'{' if !in_string => open_braces += 1,
-                            b'}' if !in_string => {
-                                if open_braces > 0 {
-                                    open_braces -= 1;
-                                }
-                            }
-                            b'[' if !in_string => open_brackets += 1,
-                            b']' if !in_string => {
-                                if open_brackets > 0 {
-                                    open_brackets -= 1;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    // If all braces/brackets are balanced, we have a complete JSON
-                    if open_braces == 0 && open_brackets == 0 && !in_string {
-                        break;
-                    }
-
-                    // Safety check to prevent buffer from growing too large
-                    if buffer.len() > 1024 * 1024 {
-                        // 1MB limit
-                        error!("request too large");
-                        let _ = stream.write_all("request too large".as_ref()).await;
-                        return;
-                    }
-                }
-                Err(err) => {
-                    error!("failed to read request: {}", err);
-                    let _ = stream.write_all("bad request".as_ref()).await;
-                    return;
-                }
-            }
-        }
-
-        // First, try to parse as a batch request
-        let batch_request: Result<JsonRpcBatchRequest, _> = encoder::from_slice(&buffer);
-
-        match batch_request {
-            Ok(requests) if !requests.is_empty() => {
-                // Valid batch request
-                let mut responses = Vec::with_capacity(requests.len());
-
-                for req in requests {
-                    let response = if req.jsonrpc != "2.0" {
-                        // Invalid JSON-RPC version
-                        JsonRpcResponse {
-                            jsonrpc: "2.0".to_string(),
-                            id: req.id.unwrap_or(Value::Null),
-                            result: None,
-                            error: Some(JsonRpcError {
-                                code: INVALID_REQUEST,
-                                message: "Invalid JSON-RPC version, expected 2.0".to_string(),
-                                data: None,
-                            }),
-                        }
-                    } else {
-                        // Process the request
-                        Api::process_jsonrpc(req, zinit.clone()).await
-                    };
-
-                    responses.push(response);
-                }
-
-                // Serialize and send the batch response
-                let value = match encoder::to_vec(&responses) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        error!("failed to serialize batch response: {}", err);
-                        return;
-                    }
-                };
-
-                if let Err(err) = stream.write_all(&value).await {
-                    error!("failed to send batch response to client: {}", err);
-                };
-
-                // Add a newline character to indicate the end of the response
-                if let Err(err) = stream.write_all(b"\n").await {
-                    error!("failed to send newline: {}", err);
-                };
-
-                let _ = stream.flush().await;
-            }
-            Ok(_) => {
-                // Empty batch, return error
-                let response = JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: Value::Null,
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: INVALID_REQUEST,
-                        message: "Invalid Request: Empty batch".to_string(),
-                        data: None,
-                    }),
-                };
-
-                // Serialize and send the response
-                let value = match encoder::to_vec(&response) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        error!("failed to serialize response: {}", err);
-                        return;
-                    }
-                };
-
-                if let Err(err) = stream.write_all(&value).await {
-                    error!("failed to send response to client: {}", err);
-                };
-
-                // Add a newline character to indicate the end of the response
-                if let Err(err) = stream.write_all(b"\n").await {
-                    error!("failed to send newline: {}", err);
-                };
-
-                let _ = stream.flush().await;
-            }
-            Err(_) => {
-                // Not a batch request, try as a single request
-                let request: Result<JsonRpcRequest, _> = encoder::from_slice(&buffer);
-
-                match request {
-                    Ok(req) => {
-                        // Valid JSON-RPC request
-                        let response = if req.jsonrpc != "2.0" {
-                            // Invalid JSON-RPC version
-                            JsonRpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req.id.unwrap_or(Value::Null),
-                                result: None,
-                                error: Some(JsonRpcError {
-                                    code: INVALID_REQUEST,
-                                    message: "Invalid JSON-RPC version, expected 2.0".to_string(),
-                                    data: None,
-                                }),
-                            }
-                        } else {
-                            // Process the request
-                            Api::process_jsonrpc(req, zinit).await
-                        };
-
-                        // Serialize and send the response
-                        let value = match encoder::to_vec(&response) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                error!("failed to serialize response: {}", err);
-                                return;
-                            }
-                        };
-
-                        if let Err(err) = stream.write_all(&value).await {
-                            error!("failed to send response to client: {}", err);
-                        };
-
-                        // Add a newline character to indicate the end of the response
-                        if let Err(err) = stream.write_all(b"\n").await {
-                            error!("failed to send newline: {}", err);
-                        };
-
-                        let _ = stream.flush().await;
-                    }
-                    Err(_) => {
-                        // Invalid JSON, return error
-                        let response = JsonRpcResponse {
-                            jsonrpc: "2.0".to_string(),
-                            id: Value::Null,
-                            result: None,
-                            error: Some(JsonRpcError {
-                                code: INVALID_REQUEST,
-                                message: "Invalid JSON in request".to_string(),
-                                data: None,
-                            }),
-                        };
-
-                        // Serialize and send the response
-                        let value = match encoder::to_vec(&response) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                error!("failed to serialize response: {}", err);
-                                return;
-                            }
-                        };
-
-                        if let Err(err) = stream.write_all(&value).await {
-                            error!("failed to send response to client: {}", err);
-                        };
-
-                        // Add a newline character to indicate the end of the response
-                        if let Err(err) = stream.write_all(b"\n").await {
-                            error!("failed to send newline: {}", err);
-                        };
-
-                        let _ = stream.flush().await;
-                    }
-                }
-            }
-        }
-    }
-
-    // Helper functions for legacy protocol removed
-
-    async fn list(zinit: ZInit) -> Result<Value> {
-        let services = zinit.list().await?;
-        let mut map: HashMap<String, String> = HashMap::new();
+    async fn list_internal(&self) -> Result<HashMap<String, String>> {
+        let services = self.zinit.list().await?;
+        let mut map = HashMap::new();
         for service in services {
-            let state = zinit.status(&service).await?;
+            let state = self.zinit.status(&service).await?;
             map.insert(service, format!("{:?}", state.state));
         }
-
-        Ok(encoder::to_value(map)?)
+        Ok(map)
     }
 
-    async fn monitor<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        // Use the existing working directory which should be set to the config dir
-        // when Zinit is started with the -c flag (default /etc/zinit)
-        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
-            .context("failed to load service config")?;
-
-        zinit.monitor(name, service).await?;
-        Ok(Value::Null)
+    async fn monitor_internal<S: AsRef<str>>(&self, name: S) -> Result<()> {
+        let name_str = name.as_ref();
+        let config_path = self.config_dir.join(format!("{}.yaml", name_str));
+        let (name_loaded, service) = config::load(&config_path)
+            .with_context(|| format!("Failed to load service config: {}", config_path.display()))?;
+        if name_loaded != name_str {
+             warn!("Loaded service name '{}' does not match requested name '{}'", name_loaded, name_str);
+        }
+        self.zinit.monitor(name_str.to_string(), service).await?;
+        Ok(())
     }
 
-    async fn forget<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        zinit.forget(name).await?;
-        Ok(Value::Null)
+    async fn forget_internal<S: AsRef<str>>(&self, name: S) -> Result<()> {
+        self.zinit.forget(name).await?;
+        Ok(())
     }
 
-    async fn stop<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        zinit.stop(name).await?;
-        Ok(Value::Null)
+    async fn stop_internal<S: AsRef<str>>(&self, name: S) -> Result<()> {
+        self.zinit.stop(name).await?;
+        Ok(())
     }
 
-    async fn shutdown(zinit: ZInit) -> Result<Value> {
+    async fn shutdown_internal(&self) -> Result<()> {
+        let zinit = self.zinit.clone();
         tokio::spawn(async move {
             if let Err(err) = zinit.shutdown().await {
-                error!("failed to execute shutdown: {}", err);
+                error!("Failed to execute shutdown: {}", err);
             }
         });
-
-        Ok(Value::Null)
+        Ok(())
     }
 
-    async fn reboot(zinit: ZInit) -> Result<Value> {
+    async fn reboot_internal(&self) -> Result<()> {
+        let zinit = self.zinit.clone();
         tokio::spawn(async move {
             if let Err(err) = zinit.reboot().await {
-                error!("failed to execute reboot: {}", err);
+                error!("Failed to execute reboot: {}", err);
             }
         });
-
-        Ok(Value::Null)
+        Ok(())
     }
 
-    async fn start<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        zinit.start(name).await?;
-        Ok(Value::Null)
+    async fn start_internal<S: AsRef<str>>(&self, name: S) -> Result<()> {
+        self.zinit.start(name).await?;
+        Ok(())
     }
 
-    async fn kill<S: AsRef<str>>(name: S, sig: S, zinit: ZInit) -> Result<Value> {
-        let sig = sig.as_ref();
-        let sig = signal::Signal::from_str(&sig.to_uppercase())?;
-        zinit.kill(name, sig).await?;
-        Ok(Value::Null)
+    async fn kill_internal<S: AsRef<str>>(&self, name: S, sig_str: S) -> Result<()> {
+        let sig = signal::Signal::from_str(&sig_str.as_ref().to_uppercase())
+            .map_err(|_| anyhow::anyhow!("Invalid signal: {}", sig_str.as_ref()))?;
+        self.zinit.kill(name, sig).await?;
+        Ok(())
     }
 
-    async fn status<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        let status = zinit.status(&name).await?;
+    async fn status_internal<S: AsRef<str>>(&self, name: S) -> Result<Status> {
+        let name_ref = name.as_ref();
+        let status = self.zinit.status(name_ref).await?;
+
+        let mut after_map = HashMap::new();
+        for service_dep in status.service.after.iter() {
+             let dep_status = match self.zinit.status(service_dep).await {
+                 Ok(dep) => dep.state,
+                 Err(_) => ZinitInternalState::Unknown,
+             };
+             after_map.insert(service_dep.clone(), format!("{:?}", dep_status));
+        }
 
         let result = Status {
-            name: name.as_ref().into(),
+            name: name_ref.to_string(),
             pid: status.pid.as_raw() as u32,
             state: format!("{:?}", status.state),
             target: format!("{:?}", status.target),
-            after: {
-                let mut after = HashMap::new();
-                for service in status.service.after {
-                    let status = match zinit.status(&service).await {
-                        Ok(dep) => dep.state,
-                        Err(_) => crate::zinit::State::Unknown,
-                    };
-                    after.insert(service, format!("{:?}", status));
-                }
-                after
-            },
+            after: after_map,
         };
 
-        Ok(encoder::to_value(result)?)
+        Ok(result)
     }
 
-    async fn create_service<S: AsRef<str>>(
+    async fn create_service_internal<S: AsRef<str>>(
+        &self,
         name: S,
-        content: &serde_json::Map<String, Value>,
-    ) -> Result<Value> {
-        use std::fs;
-        use std::io::Write;
+        content: &Map<String, Value>,
+    ) -> Result<String> {
+        use tokio::fs;
+        use tokio::io::AsyncWriteExt;
 
         let name = name.as_ref();
-
-        // Validate service name (no path traversal, valid characters)
         if name.contains('/') || name.contains('\\') || name.contains('.') {
-            bail!("Invalid service name: must not contain '/', '\\', or '.'");
+            anyhow::bail!("Invalid service name: must not contain '/', '\\', or '.'");
         }
-
-        // Use the daemon's working directory which should be the config dir
-        let file_path = format!("{}.yaml", name);
-
-        // Check if the service file already exists
-        if Path::new(&file_path).exists() {
-            bail!("Service '{}' already exists", name);
+        let file_path = self.config_dir.join(format!("{}.yaml", name));
+        if fs::metadata(&file_path).await.is_ok() {
+            anyhow::bail!("Service '{}' already exists at {}", name, file_path.display());
         }
-
-        // Convert the JSON content to YAML
         let yaml_content = serde_yaml::to_string(content)
             .context("Failed to convert service configuration to YAML")?;
-
-        // Write the YAML content to the file
-        let mut file = fs::File::create(&file_path).context("Failed to create service file")?;
+        let mut file = fs::File::create(&file_path)
+            .await
+            .with_context(|| format!("Failed to create service file: {}", file_path.display()))?;
         file.write_all(yaml_content.as_bytes())
+            .await
             .context("Failed to write service configuration")?;
-
-        Ok(Value::String(format!(
-            "Service '{}' created successfully",
-            name
-        )))
+        Ok(format!("Service '{}' created successfully at {}", name, file_path.display()))
     }
 
-    async fn delete_service<S: AsRef<str>>(name: S) -> Result<Value> {
-        use std::fs;
-
+    async fn delete_service_internal<S: AsRef<str>>(&self, name: S) -> Result<String> {
+        use tokio::fs;
         let name = name.as_ref();
-
-        // Validate service name (no path traversal, valid characters)
         if name.contains('/') || name.contains('\\') || name.contains('.') {
-            bail!("Invalid service name: must not contain '/', '\\', or '.'");
+            anyhow::bail!("Invalid service name: must not contain '/', '\\', or '.'");
         }
-
-        // Use the daemon's working directory which should be the config dir
-        let file_path = format!("{}.yaml", name);
-
-        // Check if the service file exists
-        if !Path::new(&file_path).exists() {
-            bail!("Service '{}' not found", name);
+        let file_path = self.config_dir.join(format!("{}.yaml", name));
+        if fs::metadata(&file_path).await.is_err() {
+             anyhow::bail!("Service '{}' not found at {}", name, file_path.display());
         }
-
-        // Delete the file
-        fs::remove_file(&file_path).context("Failed to delete service file")?;
-
-        Ok(Value::String(format!(
-            "Service '{}' deleted successfully",
-            name
-        )))
+        fs::remove_file(&file_path)
+            .await
+            .with_context(|| format!("Failed to delete service file: {}", file_path.display()))?;
+        Ok(format!("Service '{}' deleted successfully from {}", name, file_path.display()))
     }
 
-    async fn get_service<S: AsRef<str>>(name: S) -> Result<Value> {
-        use std::fs;
-
+    async fn get_service_internal<S: AsRef<str>>(&self, name: S) -> Result<Value> {
+        use tokio::fs;
         let name = name.as_ref();
-
-        // Validate service name (no path traversal, valid characters)
         if name.contains('/') || name.contains('\\') || name.contains('.') {
-            bail!("Invalid service name: must not contain '/', '\\', or '.'");
+            anyhow::bail!("Invalid service name: must not contain '/', '\\', or '.'");
         }
-
-        // Use the daemon's working directory which should be the config dir
-        let file_path = format!("{}.yaml", name);
-
-        // Check if the service file exists
-        if !Path::new(&file_path).exists() {
-            bail!("Service '{}' not found", name);
+        let file_path = self.config_dir.join(format!("{}.yaml", name));
+        if fs::metadata(&file_path).await.is_err() {
+             anyhow::bail!("Service '{}' not found at {}", name, file_path.display());
         }
-
-        // Read the file content
-        let yaml_content = fs::read_to_string(&file_path).context("Failed to read service file")?;
-
-        // Parse YAML to JSON
+        let yaml_content = fs::read_to_string(&file_path)
+            .await
+            .with_context(|| format!("Failed to read service file: {}", file_path.display()))?;
         let yaml_value: serde_yaml::Value =
             serde_yaml::from_str(&yaml_content).context("Failed to parse YAML content")?;
-
-        // Convert YAML value to JSON value
         let json_value =
             serde_json::to_value(yaml_value).context("Failed to convert YAML to JSON")?;
-
         Ok(json_value)
     }
 }
+
+// --- Trait Implementations ---
+
+#[async_trait::async_trait]
+impl ZinitRpcApiServer for Api {
+    async fn discover(&self) -> RpcResult<Value> {
+        serde_json::from_str(OPENRPC_SPEC).map_err(|err| {
+            error!("Failed to parse OpenRPC spec: {}", err);
+            ErrorObjectOwned::owned(
+                jsonrpsee::types::error::INTERNAL_ERROR_CODE,
+                format!("Failed to parse OpenRPC spec: {}", err),
+                None::<()>,
+            )
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl ZinitServiceApiServer for Api {
+    async fn list(&self) -> RpcResult<HashMap<String, String>> {
+        self.list_internal().await.map_err(to_rpc_error)
+    }
+
+    async fn status(&self, name: String) -> RpcResult<Status> {
+        self.status_internal(&name).await.map_err(to_rpc_error)
+    }
+
+    async fn start(&self, name: String) -> RpcResult<()> {
+        self.start_internal(&name).await.map_err(to_rpc_error)
+    }
+
+    async fn stop(&self, name: String) -> RpcResult<()> {
+        self.stop_internal(&name).await.map_err(to_rpc_error)
+    }
+
+    async fn monitor(&self, name: String) -> RpcResult<()> {
+        self.monitor_internal(&name).await.map_err(to_rpc_error)
+    }
+
+    async fn forget(&self, name: String) -> RpcResult<()> {
+        self.forget_internal(&name).await.map_err(to_rpc_error)
+    }
+
+    async fn kill(&self, name: String, signal: String) -> RpcResult<()> {
+        self.kill_internal(&name, &signal).await.map_err(to_rpc_error)
+    }
+
+    async fn create(&self, name: String, content: Map<String, Value>) -> RpcResult<String> {
+        self.create_service_internal(&name, &content).await.map_err(to_rpc_error)
+    }
+
+    async fn delete(&self, name: String) -> RpcResult<String> {
+        self.delete_service_internal(&name).await.map_err(to_rpc_error)
+    }
+
+    async fn get(&self, name: String) -> RpcResult<Value> {
+        self.get_service_internal(&name).await.map_err(to_rpc_error)
+    }
+}
+
+#[async_trait::async_trait]
+impl ZinitSystemApiServer for Api {
+    async fn shutdown(&self) -> RpcResult<()> {
+        self.shutdown_internal().await.map_err(to_rpc_error)
+    }
+
+    async fn reboot(&self) -> RpcResult<()> {
+        self.reboot_internal().await.map_err(to_rpc_error)
+    }
+}
+
+/* Keep ZinitLoggingApiServer impl block commented out
+#[async_trait::async_trait]
+impl ZinitLoggingApiServer for Api {
+    async fn log_subscribe(
+        &self,
+        mut sink: SubscriptionSink,
+        params: Params<'_>,
+    // Use jsonrpsee::Error directly
+    ) -> Result<(), RpcError> {
+        sink.accept().await.map_err(|e| {
+            error!("Failed to accept subscription: {}", e);
+            e // Assuming accept error is jsonrpsee::Error
+        })?;
+
+        let filter: Option<String> = params.optional_params().map_err(|e_obj| {
+            error!("Failed to parse subscription params: {}", e_obj);
+            // Convert ErrorObjectOwned into jsonrpsee::Error
+            RpcError::Call(e_obj.into())
+        })?;
+
+        info!("New log subscription accepted. Filter: {:?}", filter);
+
+        let mut log_receiver = self.zinit.logs(true).await;
+        let zinit_clone = self.zinit.clone();
+
+        loop {
+            tokio::select! {
+                _ = zinit_clone.wait() => {
+                    info!("Zinit shutting down, closing log subscription.");
+                    break;
+                },
+                maybe_line = log_receiver.recv() => {
+                    match maybe_line {
+                        Some(line) => {
+                            let line_str = line.to_string();
+                            let should_send = filter.as_ref().map_or(true, |f| line_str.contains(f));
+
+                            if should_send {
+                                if let Err(e) = sink.send(&line_str).await {
+                                    warn!("Failed to send log line: {}. Closing subscription.", e);
+                                    break;
+                                }
+                            }
+                        }
+                        None => {
+                            info!("Log stream ended. Closing subscription.");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Need to implement the unsubscribe method required by the trait definition
+    async fn log_unsubscribe(&self, _subscription_id: String) -> RpcResult<bool> {
+         // Usually, jsonrpsee handles the closing automatically when the sink is dropped.
+         // Return Ok(true) to indicate success.
+         Ok(true)
+     }
+}
+*/ // End of commented out block

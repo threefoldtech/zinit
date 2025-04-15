@@ -159,24 +159,23 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        ("list", _) => app::list(socket).await,
-        ("shutdown", _) => app::shutdown(socket).await,
-        ("reboot", _) => app::reboot(socket).await,
+        ("list", _) => app::list().await,
+        ("shutdown", _) => app::shutdown().await,
+        ("reboot", _) => app::reboot().await,
         // ("log", Some(matches)) => app::log(matches.value_of("filter")),
         ("status", Some(matches)) => {
-            app::status(socket, matches.value_of("service").unwrap()).await
+            app::status(matches.value_of("service").unwrap()).await
         }
-        ("stop", Some(matches)) => app::stop(socket, matches.value_of("service").unwrap()).await,
-        ("start", Some(matches)) => app::start(socket, matches.value_of("service").unwrap()).await,
+        ("stop", Some(matches)) => app::stop(matches.value_of("service").unwrap()).await,
+        ("start", Some(matches)) => app::start(matches.value_of("service").unwrap()).await,
         ("forget", Some(matches)) => {
-            app::forget(socket, matches.value_of("service").unwrap()).await
+            app::forget(matches.value_of("service").unwrap()).await
         }
         ("monitor", Some(matches)) => {
-            app::monitor(socket, matches.value_of("service").unwrap()).await
+            app::monitor(matches.value_of("service").unwrap()).await
         }
         ("kill", Some(matches)) => {
             app::kill(
-                socket,
                 matches.value_of("service").unwrap(),
                 matches.value_of("signal").unwrap(),
             )
@@ -184,16 +183,15 @@ async fn main() -> Result<()> {
         }
         ("log", Some(matches)) => {
             app::logs(
-                socket,
                 matches.value_of("filter"),
                 !matches.is_present("snapshot"),
             )
             .await
         }
         ("restart", Some(matches)) => {
-            app::restart(socket, matches.value_of("service").unwrap()).await
+            app::restart(matches.value_of("service").unwrap()).await
         }
-        _ => app::list(socket).await, // default command
+        _ => app::list().await, // default command
     };
 
     match result {

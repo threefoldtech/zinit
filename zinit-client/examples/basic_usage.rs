@@ -6,14 +6,9 @@ use zinit_client::Client;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create a client using Unix socket transport
-    // let unix_client = Client::unix_socket("/var/run/zinit.sock");
-
-    // Or create a client using HTTP transport
-    let http_client = Client::http("http://localhost:8080");
-
-    // Choose which client to use for this example
-    let client = http_client;
+    // Create a client using default local URLs (http://127.0.0.1:9000, ws://127.0.0.1:9001)
+    let client = Client::default_local()?;
+    println!("Using client connected to default HTTP/WS URLs.");
 
     // Service name for our example
     let service_name = "test12345";
@@ -49,8 +44,10 @@ async fn main() -> Result<()> {
     match client.monitor(service_name).await {
         Ok(_) => println!("Service is now being monitored"),
         Err(e) => {
+            // Note: The 'monitor' command requires the service file (e.g., test12345.yaml)
+            // to exist in the zinit server's config directory.
+            // If it doesn't, this call will fail.
             println!("Warning: Failed to monitor service: {}", e);
-            println!("This is expected when using HTTP transport if the service file doesn't exist on the server.");
             println!("The service was created but may not be monitored.");
         }
     }

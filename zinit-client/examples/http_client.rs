@@ -3,10 +3,10 @@ use zinit_client::Client;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create a client using HTTP transport
-    let client = Client::http("http://localhost:8080");
+    // Create a client using default local URLs (http://127.0.0.1:9000, ws://127.0.0.1:9001)
+    let client = Client::default_local()?;
 
-    println!("Connecting to Zinit via HTTP...");
+    println!("Connecting to Zinit via default HTTP/WS URLs...");
 
     // List all services
     println!("Listing all services:");
@@ -36,8 +36,8 @@ async fn main() -> Result<()> {
             }
         }
         Err(e) => {
-            println!("Error connecting to Zinit HTTP proxy: {}", e);
-            println!("Make sure the Zinit HTTP proxy is running on http://localhost:8080");
+            println!("Error connecting to Zinit: {}", e);
+            println!("Make sure Zinit is running and listening on http://127.0.0.1:9000");
         }
     }
 

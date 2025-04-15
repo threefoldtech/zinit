@@ -1,276 +1,243 @@
-use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
-use serde_json::{self as encoder, Value};
+use crate::app::api_trait::{
+    ZinitRpcApiClient, ZinitServiceApiClient, ZinitSystemApiClient,
+};
+use crate::app::types::Status;
+use anyhow::{Context, Result, bail};
+use jsonrpsee::{
+    core::client::{SubscriptionClientT, Subscription},
+    http_client::{HttpClient, HttpClientBuilder},
+    ws_client::{WsClient, WsClientBuilder},
+};
+use jsonrpsee::rpc_params;
+use log::error; // Use log crate
+use serde_json::{Value, Map};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::UnixStream;
+use std::time::Duration; // For timeouts
+use tokio::io::AsyncWriteExt; // For logs output
 
-use super::server::Status;
-
-// JSON-RPC 2.0 structures
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
-    params: Option<Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcError {
-    code: i32,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
-}
-
+// Client struct now holds URLs
 pub struct Client {
-    socket: PathBuf,
-    next_id: AtomicU64,
+    http_url: String,
+    ws_url: String,
+    // We can store created clients if we want to reuse connections,
+    // but creating them on demand is simpler for now.
 }
 
 impl Client {
-    pub fn new<P: AsRef<Path>>(socket: P) -> Client {
-        Client {
-            socket: socket.as_ref().to_path_buf(),
-            next_id: AtomicU64::new(1),
-        }
+    // Constructor now takes HTTP and WS URLs
+    pub fn new(http_url: String, ws_url: String) -> Self {
+        // Basic validation or parsing could be added here
+        Client { http_url, ws_url }
     }
 
-    async fn connect(&self) -> Result<UnixStream> {
-        UnixStream::connect(&self.socket).await.with_context(|| {
-            format!(
-                "failed to connect to '{:?}'. is zinit listening on that socket?",
-                self.socket
-            )
-        })
+    // Helper to create an HTTP client
+    async fn http_client(&self) -> Result<HttpClient> {
+        HttpClientBuilder::default()
+            .request_timeout(Duration::from_secs(30)) // Example timeout
+            .build(&self.http_url)
+            .context("Failed to build HTTP client")
     }
 
-    // Send a JSON-RPC request and return the result
-    async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        self.try_jsonrpc(method, params).await
+    // Helper to create a WS client
+    async fn ws_client(&self) -> Result<WsClient> {
+        // Use WsTransportClientBuilder for custom headers if needed later
+        WsClientBuilder::default()
+            .request_timeout(Duration::from_secs(30)) // Example timeout
+            .build(&self.ws_url)
+            .await // build() is async for WsClient
+            .context("Failed to build WebSocket client")
     }
 
-    // Use JSON-RPC protocol
-    async fn try_jsonrpc(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        // Get a unique ID for this request
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(Value::Number(serde_json::Number::from(id))),
-            method: method.to_string(),
-            params,
-        };
-
-        let mut con = BufStream::new(self.connect().await?);
-
-        // Serialize and send the request
-        let request_bytes = encoder::to_vec(&request)?;
-        con.write_all(&request_bytes).await?;
-        con.flush().await?;
-
-        // Read and parse the response
-        let mut buffer = Vec::new();
-        let mut temp_buf = [0u8; 1024];
-
-        loop {
-            let n = con.read(&mut temp_buf).await?;
-            if n == 0 {
-                break; // Connection closed
-            }
-
-            buffer.extend_from_slice(&temp_buf[..n]);
-
-            // Check if the buffer ends with a newline
-            if buffer.ends_with(b"\n") {
-                break;
-            }
-        }
-
-        // Convert to string and trim the trailing newline
-        let data = String::from_utf8(buffer)?;
-        let data = data.trim_end();
-
-        // Parse the JSON-RPC response - improved error handling
-        let response: JsonRpcResponse = match encoder::from_str(data) {
-            Ok(response) => response,
-            Err(e) => {
-                // If we can't parse the response as JSON-RPC, this is an error
-                error!("Failed to parse JSON-RPC response: {}", e);
-                error!("Raw response: {}", data);
-                bail!("Invalid response from server: failed to parse JSON-RPC")
-            }
-        };
-
-        // Handle the response according to JSON-RPC 2.0 spec
-        if let Some(error) = response.error {
-            // Error response - has 'error' field
-            bail!("RPC error ({}): {}", error.code, error.message);
-        } else {
-            // Success response - return result (which might be null)
-            // This properly handles all success responses including null values
-            Ok(response.result.unwrap_or(Value::Null))
-        }
-    }
-
-    // JSON-RPC is now the only supported protocol
-    // Legacy command method has been removed
-
-    pub async fn logs<O: tokio::io::AsyncWrite + Unpin, S: AsRef<str>>(
-        &self,
-        mut out: O,
-        filter: Option<S>,
-        follow: bool,
-    ) -> Result<()> {
-        // Convert to JSON-RPC params
-        let params = if let Some(ref filter) = filter {
-            serde_json::json!({
-                "filter": filter.as_ref(),
-                "snapshot": !follow
-            })
-        } else {
-            serde_json::json!({
-                "snapshot": !follow
-            })
-        };
-
-        // Make a JSON-RPC request to the log method
-        let response = self.jsonrpc_request("log", Some(params)).await?;
-
-        // Write the log data to the output
-        if let Some(logs) = response.as_array() {
-            for log in logs {
-                if let Some(log_str) = log.as_str() {
-                    out.write_all(log_str.as_bytes()).await?;
-                    out.write_all(b"\n").await?;
-                }
-            }
-        } else if let Some(log_str) = response.as_str() {
-            out.write_all(log_str.as_bytes()).await?;
-        }
-
-        Ok(())
-    }
+    // --- Service Methods ---
 
     pub async fn list(&self) -> Result<HashMap<String, String>> {
-        let response = self.jsonrpc_request("service.list", None).await?;
-        Ok(encoder::from_value(response)?)
-    }
-
-    pub async fn shutdown(&self) -> Result<()> {
-        self.jsonrpc_request("system.shutdown", None).await?;
-        Ok(())
-    }
-
-    pub async fn reboot(&self) -> Result<()> {
-        self.jsonrpc_request("system.reboot", None).await?;
-        Ok(())
+        let client = self.http_client().await?;
+        client
+            .list() // Call the trait method
+            .await
+            .context("RPC call 'service.list' failed")
     }
 
     pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<Status> {
-        let params = serde_json::json!({
-            "name": name.as_ref()
-        });
-
-        let response = self.jsonrpc_request("service.status", Some(params)).await?;
-        Ok(encoder::from_value(response)?)
+        let client = self.http_client().await?;
+        client
+            .status(name.as_ref().to_string()) // Pass name as String
+            .await
+            .context("RPC call 'service.status' failed")
     }
 
     pub async fn start<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let params = serde_json::json!({
-            "name": name.as_ref()
-        });
-
-        self.jsonrpc_request("service.start", Some(params)).await?;
-        Ok(())
+        let client = self.http_client().await?;
+        client
+            .start(name.as_ref().to_string())
+            .await
+            .context("RPC call 'service.start' failed")
     }
 
     pub async fn stop<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let params = serde_json::json!({
-            "name": name.as_ref()
-        });
-
-        self.jsonrpc_request("service.stop", Some(params)).await?;
-        Ok(())
-    }
-
-    pub async fn forget<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let params = serde_json::json!({
-            "name": name.as_ref()
-        });
-
-        self.jsonrpc_request("service.forget", Some(params)).await?;
-        Ok(())
+        let client = self.http_client().await?;
+        client
+            .stop(name.as_ref().to_string())
+            .await
+            .context("RPC call 'service.stop' failed")
     }
 
     pub async fn monitor<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        let params = serde_json::json!({
-            "name": name.as_ref(),
-        });
+        let client = self.http_client().await?;
+        client
+            .monitor(name.as_ref().to_string())
+            .await
+            .context("RPC call 'service.monitor' failed")
+    }
 
-        self.jsonrpc_request("service.monitor", Some(params))
-            .await?;
-        Ok(())
+    pub async fn forget<S: AsRef<str>>(&self, name: S) -> Result<()> {
+        let client = self.http_client().await?;
+        client
+            .forget(name.as_ref().to_string())
+            .await
+            .context("RPC call 'service.forget' failed")
     }
 
     pub async fn kill<S: AsRef<str>>(&self, name: S, sig: S) -> Result<()> {
-        let params = serde_json::json!({
-            "name": name.as_ref(),
-            "signal": sig.as_ref()
-        });
-
-        self.jsonrpc_request("service.kill", Some(params)).await?;
-        Ok(())
+        let client = self.http_client().await?;
+        client
+            .kill(name.as_ref().to_string(), sig.as_ref().to_string())
+            .await
+            .context("RPC call 'service.kill' failed")
     }
 
-    // Service file operations
+    // --- Service File Methods ---
+
     pub async fn create_service<S: AsRef<str>>(
         &self,
         name: S,
-        content: serde_json::Map<String, Value>,
+        content: Map<String, Value>,
     ) -> Result<String> {
-        let params = serde_json::json!({
-            "name": name.as_ref(),
-            "content": content
-        });
-
-        let response = self.jsonrpc_request("service.create", Some(params)).await?;
-        match response {
-            Value::String(s) => Ok(s),
-            _ => Ok("Service created successfully".to_string()),
-        }
+        let client = self.http_client().await?;
+        client
+            .create(name.as_ref().to_string(), content)
+            .await
+            .context("RPC call 'service.create' failed")
     }
 
     pub async fn delete_service<S: AsRef<str>>(&self, name: S) -> Result<String> {
-        let params = serde_json::json!({
-            "name": name.as_ref()
-        });
-
-        let response = self.jsonrpc_request("service.delete", Some(params)).await?;
-        match response {
-            Value::String(s) => Ok(s),
-            _ => Ok("Service deleted successfully".to_string()),
-        }
+        let client = self.http_client().await?;
+        client
+            .delete(name.as_ref().to_string())
+            .await
+            .context("RPC call 'service.delete' failed")
     }
 
     pub async fn get_service<S: AsRef<str>>(&self, name: S) -> Result<Value> {
-        let params = serde_json::json!({
-            "name": name.as_ref()
-        });
+        let client = self.http_client().await?;
+        client
+            .get(name.as_ref().to_string())
+            .await
+            .context("RPC call 'service.get' failed")
+    }
 
-        self.jsonrpc_request("service.get", Some(params)).await
+    // --- System Methods ---
+
+    pub async fn shutdown(&self) -> Result<()> {
+        let client = self.http_client().await?;
+        client
+            .shutdown()
+            .await
+            .context("RPC call 'system.shutdown' failed")
+    }
+
+    pub async fn reboot(&self) -> Result<()> {
+        let client = self.http_client().await?;
+        client
+            .reboot()
+            .await
+            .context("RPC call 'system.reboot' failed")
+    }
+
+    // --- Logging Subscription ---
+
+    pub async fn logs<O: AsyncWriteExt + Unpin, S: AsRef<str>>(
+        &self,
+        mut out: O,
+        filter: Option<S>,
+        follow: bool, // 'follow' now determines if we subscribe or just fetch once (if needed)
+    ) -> Result<()> {
+        if !follow {
+            // If not following, we might need a way to fetch a snapshot.
+            // The current API trait only defines a subscription.
+            // Option 1: Add a separate `logs_snapshot` method to the RPC API.
+            // Option 2: Subscribe, get the initial burst, then unsubscribe (complex).
+            // Option 3: For now, just error if not following, as we only have subscribe.
+            bail!("Non-following log retrieval is not currently supported via WebSocket subscription. Use follow=true.");
+            // OR implement snapshot logic if added to API trait later.
+        }
+
+        let client = self.ws_client().await?;
+
+        // Pass filter as parameter during subscription
+        let filter_param = filter.map(|s| s.as_ref().to_string());
+        // Parameters are not needed for this subscription method
+
+        // Subscribe using the core subscribe method to pass parameters
+        let mut subscription: Subscription<String> = client
+            .subscribe("stream_log", rpc_params![filter_param], "stream_log_unsubscribe") // Pass filter_param as the parameter
+            .await
+            .context("Failed to subscribe to logs")?;
+
+        // println!("Subscribed to logs... Filter: {:?}", filter_param); // User feedback
+
+        // Process messages from the subscription
+        loop {
+            tokio::select! {
+                // Wait for ctrl-c signal to gracefully exit (optional but good practice)
+                _ = tokio::signal::ctrl_c() => {
+                    println!("Ctrl-C received, stopping log stream.");
+                    break;
+                }
+                // Get next item from subscription stream
+                item = subscription.next() => {
+                    match item {
+                        Some(Ok(log_line)) => {
+                            // Write log line to output
+                            if let Err(e) = out.write_all(log_line.as_bytes()).await {
+                                error!("Failed to write log line to output: {}", e);
+                                break; // Stop if output fails
+                            }
+                            if let Err(e) = out.write_all(b"\n").await {
+                                error!("Failed to write newline to output: {}", e);
+                                break;
+                            }
+                            if let Err(e) = out.flush().await {
+                                error!("Failed to flush output: {}", e);
+                                break;
+                            }
+                        }
+                        Some(Err(e)) => {
+                            // Handle errors from the subscription stream itself
+                            error!("Error receiving log line: {}", e);
+                            // Depending on the error, might want to break or retry
+                            break;
+                        }
+                        None => {
+                            // Subscription stream closed by the server
+                            println!("Log stream ended.");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Unsubscribe is handled automatically when the Subscription object is dropped.
+        Ok(())
+    }
+
+     // --- RPC Discover Method ---
+     pub async fn discover(&self) -> Result<Value> {
+        let client = self.http_client().await?;
+        client
+            .discover()
+            .await
+            .context("RPC call 'rpc.discover' failed")
     }
 }

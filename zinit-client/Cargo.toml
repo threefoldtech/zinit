@@ -8,12 +8,23 @@ authors = ["ThreeFold Tech, https://github.com/threefoldtech"]
 
 [dependencies]
 anyhow = "1.0"
-tokio = { version = "1.14.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json"] }
-thiserror = "1.0"
-log = "0.4"
+tokio = { version = "1.14.0", features = ["full"] } # Keep tokio
+serde = { version = "1.0", features = ["derive"] } # Keep serde
+serde_json = "1.0" # Keep serde_json
+thiserror = "1.0" # Keep thiserror
+log = "0.4" # Keep log
+
+# Add jsonrpsee client dependencies
+jsonrpsee = { version = "0.22", features = ["client", "macros", "http-client", "ws-client"] }
+# jsonrpsee-types = "0.22" # Usually included via jsonrpsee
+
+# Add url for parsing
+url = "2.5"
+
+# Add path dependency to the main zinit crate to access api_trait and types
+zinit = { path = "..", package="zinit" }
+# Remove reqwest, jsonrpsee http client will be used instead
+# reqwest = { version = "0.11", features = ["json"] }
 
 [[example]]
 name = "basic_usage"
@@ -22,4 +33,4 @@ path = "examples/basic_usage.rs"
 [[example]]
 name = "http_client"
 path = "examples/http_client.rs"
-log = "0.4"
+# Removed unused 'log = "0.4"' key under example

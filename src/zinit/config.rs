@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
+use jsonrpsee::tracing::error;
 use serde::{Deserialize, Serialize};
 use serde_yaml as yaml;
 use std::collections::HashMap;

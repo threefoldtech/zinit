@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use command_group::CommandGroup;
+use jsonrpsee::tracing::{debug, error, info};
 use nix::sys::signal;
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd::Pid;
