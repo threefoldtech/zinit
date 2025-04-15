@@ -60,7 +60,7 @@ pub async fn init(
         eprintln!("failed to setup logging: {}", err);
     }
 
-    let config = absolute(Path::new(config)).context("failed to get config dire absolute path")?;
+    let config = absolute(Path::new(config)).context("failed to get config dir absolute path")?;
     let socket = absolute(Path::new(socket)).context("failed to get socket file absolute path")?;
 
     if let Some(dir) = socket.parent() {
