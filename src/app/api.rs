@@ -458,7 +458,7 @@ impl Api {
                 if let Some(params) = &request.params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
                         if let Some(content) = params.get("content").and_then(|v| v.as_object()) {
-                            Self::create_service(name, content, zinit).await
+                            Self::create_service(name, content).await
                         } else {
                             Err(anyhow::anyhow!("Missing or invalid 'content' parameter"))
                         }
@@ -473,7 +473,7 @@ impl Api {
             "service.delete" => {
                 if let Some(params) = &request.params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Self::delete_service(name, zinit).await
+                        Self::delete_service(name).await
                     } else {
                         Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
                     }
@@ -485,7 +485,7 @@ impl Api {
             "service.get" => {
                 if let Some(params) = &request.params {
                     if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        Self::get_service(name, zinit).await
+                        Self::get_service(name).await
                     } else {
                         Err(anyhow::anyhow!("Missing or invalid 'name' parameter"))
                     }
@@ -658,7 +658,6 @@ impl Api {
     async fn create_service<S: AsRef<str>>(
         name: S,
         content: &serde_json::Map<String, Value>,
-        zinit: ZInit,
     ) -> Result<Value> {
         use std::fs;
         use std::io::Write;
@@ -692,7 +691,7 @@ impl Api {
             name
         )))
     }
-    async fn delete_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
+    async fn delete_service<S: AsRef<str>>(name: S) -> Result<Value> {
         use std::fs;
 
         let name = name.as_ref();
@@ -718,7 +717,7 @@ impl Api {
             name
         )))
     }
-    async fn get_service<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
+    async fn get_service<S: AsRef<str>>(name: S) -> Result<Value> {
         use std::fs;
 
         let name = name.as_ref();
