@@ -29,12 +29,7 @@ command-group = "1.0.8"
 hyper = "1.6.0"
 axum = { version = "0.7.4", features = ["http1"] }
 bytes = "1.0"
-# Corrected features based on analysis and provided list
-jsonrpsee = { version = "0.22", features = ["macros", "server", "http-client", "ws-client"] }
-jsonrpsee-types = "0.22" # Keep this if needed, though often pulled in by jsonrpsee
-url = "2.5" # Add url crate
-futures = "0.3" # Add futures crate (needed for StreamExt)
-async-trait = "0.1" # Add async-trait crate
+
 [dev-dependencies]
 tokio = { version = "1.14.0", features = ["full", "test-util"] }
 tempfile = "3.3.0"
@@ -45,6 +40,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "zinit"
 path = "src/main.rs"
+[[bin]]
+name = "testapp"
+path = "src/bin/testapp.rs"
 [[bin]]
 name = "zinit-http"
 path = "src/bin/zinit-http.rs"

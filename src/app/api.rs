@@ -100,24 +100,246 @@ pub struct Api {
 }
 
 impl Api {
-    pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P, _http_port: Option<u16>) -> Api {
-        // _http_port parameter kept for backward compatibility but not used
+    pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P) -> Api {
         Api {
             zinit,
             socket: socket.as_ref().to_path_buf(),
         }
     }
 
-    // HTTP proxy functionality has been moved to a separate binary (zinit-http)
-
     pub async fn serve(&self) -> Result<()> {
-        // HTTP proxy functionality has been moved to a separate binary (zinit-http)
-
         // Start Unix socket server
         let listener = UnixListener::bind(&self.socket).context("failed to listen for socket")?;
         loop {
             if let Ok((stream, _addr)) = listener.accept().await {
                 tokio::spawn(Self::handle(stream, self.zinit.clone()));
+            }
+        }
+    }
+
+    async fn handle(stream: UnixStream, zinit: ZInit) {
+        let mut stream = BufStream::new(stream);
+        let mut buffer = Vec::new();
+
+        // Read the JSON-RPC request
+        let mut temp_buf = [0u8; 1024];
+        loop {
+            match stream.read(&mut temp_buf).await {
+                Ok(0) => break, // Connection closed
+                Ok(n) => {
+                    buffer.extend_from_slice(&temp_buf[..n]);
+
+                    // Check if we have a complete JSON object/array
+                    // This is a simple heuristic - we count opening and closing braces/brackets
+                    let mut open_braces = 0;
+                    let mut open_brackets = 0;
+                    let mut in_string = false;
+                    let mut escape_next = false;
+
+                    for &b in &buffer {
+                        if escape_next {
+                            escape_next = false;
+                            continue;
+                        }
+
+                        match b {
+                            b'\\' if in_string => escape_next = true,
+                            b'"' => in_string = !in_string,
+                            b'{' if !in_string => open_braces += 1,
+                            b'}' if !in_string => {
+                                if open_braces > 0 {
+                                    open_braces -= 1;
+                                }
+                            }
+                            b'[' if !in_string => open_brackets += 1,
+                            b']' if !in_string => {
+                                if open_brackets > 0 {
+                                    open_brackets -= 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // If all braces/brackets are balanced, we have a complete JSON
+                    if open_braces == 0 && open_brackets == 0 && !in_string {
+                        break;
+                    }
+
+                    // Safety check to prevent buffer from growing too large
+                    if buffer.len() > 1024 * 1024 {
+                        // 1MB limit
+                        error!("request too large");
+                        let _ = stream.write_all("request too large".as_ref()).await;
+                        return;
+                    }
+                }
+                Err(err) => {
+                    error!("failed to read request: {}", err);
+                    let _ = stream.write_all("bad request".as_ref()).await;
+                    return;
+                }
+            }
+        }
+
+        // First, try to parse as a batch request
+        let batch_request: Result<JsonRpcBatchRequest, _> = encoder::from_slice(&buffer);
+
+        match batch_request {
+            Ok(requests) if !requests.is_empty() => {
+                // Valid batch request
+                let mut responses = Vec::with_capacity(requests.len());
+
+                for req in requests {
+                    let response = if req.jsonrpc != "2.0" {
+                        // Invalid JSON-RPC version
+                        JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: req.id.unwrap_or(Value::Null),
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: INVALID_REQUEST,
+                                message: "Invalid JSON-RPC version, expected 2.0".to_string(),
+                                data: None,
+                            }),
+                        }
+                    } else {
+                        // Process the request
+                        Self::process_jsonrpc(req, zinit.clone()).await
+                    };
+
+                    responses.push(response);
+                }
+
+                // Serialize and send the batch response
+                let value = match encoder::to_vec(&responses) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        error!("failed to serialize batch response: {}", err);
+                        return;
+                    }
+                };
+
+                if let Err(err) = stream.write_all(&value).await {
+                    error!("failed to send batch response to client: {}", err);
+                };
+
+                // Add a newline character to indicate the end of the response
+                if let Err(err) = stream.write_all(b"\n").await {
+                    error!("failed to send newline: {}", err);
+                };
+
+                let _ = stream.flush().await;
+            }
+            Ok(_) => {
+                // Empty batch, return error
+                let response = JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: Value::Null,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: INVALID_REQUEST,
+                        message: "Invalid Request: Empty batch".to_string(),
+                        data: None,
+                    }),
+                };
+
+                let value = match encoder::to_vec(&response) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        error!("failed to serialize response: {}", err);
+                        return;
+                    }
+                };
+
+                if let Err(err) = stream.write_all(&value).await {
+                    error!("failed to send response to client: {}", err);
+                };
+
+                // Add a newline character to indicate the end of the response
+                if let Err(err) = stream.write_all(b"\n").await {
+                    error!("failed to send newline: {}", err);
+                };
+
+                let _ = stream.flush().await;
+            }
+            Err(_) => {
+                // Not a batch request, try as a single request
+                let request: Result<JsonRpcRequest, _> = encoder::from_slice(&buffer);
+
+                match request {
+                    Ok(req) => {
+                        // Valid JSON-RPC request
+                        let response = if req.jsonrpc != "2.0" {
+                            // Invalid JSON-RPC version
+                            JsonRpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: req.id.unwrap_or(Value::Null),
+                                result: None,
+                                error: Some(JsonRpcError {
+                                    code: INVALID_REQUEST,
+                                    message: "Invalid JSON-RPC version, expected 2.0".to_string(),
+                                    data: None,
+                                }),
+                            }
+                        } else {
+                            // Process the request
+                            Self::process_jsonrpc(req, zinit).await
+                        };
+
+                        // Serialize and send the response
+                        let value = match encoder::to_vec(&response) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                error!("failed to serialize response: {}", err);
+                                return;
+                            }
+                        };
+
+                        if let Err(err) = stream.write_all(&value).await {
+                            error!("failed to send response to client: {}", err);
+                        };
+
+                        // Add a newline character to indicate the end of the response
+                        if let Err(err) = stream.write_all(b"\n").await {
+                            error!("failed to send newline: {}", err);
+                        };
+
+                        let _ = stream.flush().await;
+                    }
+                    Err(_) => {
+                        // Invalid JSON, return error
+                        let response = JsonRpcResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: Value::Null,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: INVALID_REQUEST,
+                                message: "Invalid Request: Could not parse JSON".to_string(),
+                                data: None,
+                            }),
+                        };
+
+                        let value = match encoder::to_vec(&response) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                error!("failed to serialize response: {}", err);
+                                return;
+                            }
+                        };
+
+                        if let Err(err) = stream.write_all(&value).await {
+                            error!("failed to send response to client: {}", err);
+                        };
+
+                        // Add a newline character to indicate the end of the response
+                        if let Err(err) = stream.write_all(b"\n").await {
+                            error!("failed to send newline: {}", err);
+                        };
+
+                        let _ = stream.flush().await;
+                    }
+                }
             }
         }
     }
@@ -334,317 +556,6 @@ impl Api {
         }
     }
 
-    async fn handle(stream: UnixStream, zinit: ZInit) {
-        let mut stream = BufStream::new(stream);
-
-        // First, try to read as a JSON-RPC request
-        let mut buffer = Vec::new();
-
-        // Read a small amount first to check if it's JSON
-        let mut peek_buffer = [0u8; 1];
-        match stream.read_exact(&mut peek_buffer).await {
-            Ok(_) => {
-                // Put the peeked byte back into the buffer
-                buffer.push(peek_buffer[0]);
-
-                // If it starts with '{', it's likely JSON-RPC
-                if peek_buffer[0] == b'{' || peek_buffer[0] == b'[' {
-                    // Read the request until we find a newline or a certain amount of data
-                    // This avoids waiting for EOF which would require the client to close the connection
-                    let mut temp_buf = [0u8; 1024];
-                    loop {
-                        match stream.read(&mut temp_buf).await {
-                            Ok(0) => break, // Connection closed
-                            Ok(n) => {
-                                buffer.extend_from_slice(&temp_buf[..n]);
-
-                                // Check if we have a complete JSON object/array
-                                // This is a simple heuristic - we count opening and closing braces/brackets
-                                let mut open_braces = 0;
-                                let mut open_brackets = 0;
-                                let mut in_string = false;
-                                let mut escape_next = false;
-
-                                for &b in &buffer {
-                                    if escape_next {
-                                        escape_next = false;
-                                        continue;
-                                    }
-
-                                    match b {
-                                        b'\\' if in_string => escape_next = true,
-                                        b'"' => in_string = !in_string,
-                                        b'{' if !in_string => open_braces += 1,
-                                        b'}' if !in_string => {
-                                            if open_braces > 0 {
-                                                open_braces -= 1;
-                                            }
-                                        }
-                                        b'[' if !in_string => open_brackets += 1,
-                                        b']' if !in_string => {
-                                            if open_brackets > 0 {
-                                                open_brackets -= 1;
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-
-                                // If all braces/brackets are balanced, we have a complete JSON
-                                if open_braces == 0 && open_brackets == 0 && !in_string {
-                                    break;
-                                }
-
-                                // Safety check to prevent buffer from growing too large
-                                if buffer.len() > 1024 * 1024 {
-                                    // 1MB limit
-                                    error!("request too large");
-                                    let _ = stream.write_all("request too large".as_ref()).await;
-                                    return;
-                                }
-                            }
-                            Err(err) => {
-                                error!("failed to read request: {}", err);
-                                let _ = stream.write_all("bad request".as_ref()).await;
-                                return;
-                            }
-                        }
-                    }
-
-                    // First, try to parse as a batch request
-                    let batch_request: Result<JsonRpcBatchRequest, _> =
-                        encoder::from_slice(&buffer);
-
-                    match batch_request {
-                        Ok(requests) if !requests.is_empty() => {
-                            // Valid batch request
-                            let mut responses = Vec::with_capacity(requests.len());
-
-                            for req in requests {
-                                let response = if req.jsonrpc != "2.0" {
-                                    // Invalid JSON-RPC version
-                                    JsonRpcResponse {
-                                        jsonrpc: "2.0".to_string(),
-                                        id: req.id.unwrap_or(Value::Null),
-                                        result: None,
-                                        error: Some(JsonRpcError {
-                                            code: INVALID_REQUEST,
-                                            message: "Invalid JSON-RPC version, expected 2.0"
-                                                .to_string(),
-                                            data: None,
-                                        }),
-                                    }
-                                } else {
-                                    // Process the request
-                                    Self::process_jsonrpc(req, zinit.clone()).await
-                                };
-
-                                responses.push(response);
-                            }
-
-                            // Serialize and send the batch response
-                            let value = match encoder::to_vec(&responses) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    error!("failed to serialize batch response: {}", err);
-                                    return;
-                                }
-                            };
-
-                            if let Err(err) = stream.write_all(&value).await {
-                                error!("failed to send batch response to client: {}", err);
-                            };
-
-                            // Add a newline character to indicate the end of the response
-                            if let Err(err) = stream.write_all(b"\n").await {
-                                error!("failed to send newline: {}", err);
-                            };
-
-                            let _ = stream.flush().await;
-                            return;
-                        }
-                        Ok(_) => {
-                            // Empty batch, return error
-                            let response = JsonRpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: Value::Null,
-                                result: None,
-                                error: Some(JsonRpcError {
-                                    code: INVALID_REQUEST,
-                                    message: "Invalid Request: Empty batch".to_string(),
-                                    data: None,
-                                }),
-                            };
-
-                            let value = match encoder::to_vec(&response) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    error!("failed to serialize response: {}", err);
-                                    return;
-                                }
-                            };
-
-                            if let Err(err) = stream.write_all(&value).await {
-                                error!("failed to send response to client: {}", err);
-                            };
-
-                            // Add a newline character to indicate the end of the response
-                            if let Err(err) = stream.write_all(b"\n").await {
-                                error!("failed to send newline: {}", err);
-                            };
-
-                            let _ = stream.flush().await;
-                            return;
-                        }
-                        Err(_) => {
-                            // Not a batch request, try as a single request
-                            let request: Result<JsonRpcRequest, _> = encoder::from_slice(&buffer);
-
-                            match request {
-                                Ok(req) => {
-                                    // Valid JSON-RPC request
-                                    let response = if req.jsonrpc != "2.0" {
-                                        // Invalid JSON-RPC version
-                                        JsonRpcResponse {
-                                            jsonrpc: "2.0".to_string(),
-                                            id: req.id.unwrap_or(Value::Null),
-                                            result: None,
-                                            error: Some(JsonRpcError {
-                                                code: INVALID_REQUEST,
-                                                message: "Invalid JSON-RPC version, expected 2.0"
-                                                    .to_string(),
-                                                data: None,
-                                            }),
-                                        }
-                                    } else {
-                                        // Process the request
-                                        Self::process_jsonrpc(req, zinit).await
-                                    };
-
-                                    // Serialize and send the response
-                                    let value = match encoder::to_vec(&response) {
-                                        Ok(value) => value,
-                                        Err(err) => {
-                                            error!("failed to serialize response: {}", err);
-                                            return;
-                                        }
-                                    };
-
-                                    if let Err(err) = stream.write_all(&value).await {
-                                        error!("failed to send response to client: {}", err);
-                                    };
-
-                                    // Add a newline character to indicate the end of the response
-                                    if let Err(err) = stream.write_all(b"\n").await {
-                                        error!("failed to send newline: {}", err);
-                                    };
-
-                                    let _ = stream.flush().await;
-                                    return;
-                                }
-                                Err(_) => {
-                                    // Not a valid JSON-RPC request, try the line-based protocol
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If we get here, it's not a JSON-RPC request
-                // Try the line-based protocol
-                let mut cmd = String::from_utf8_lossy(&buffer).to_string();
-
-                // Read the rest of the line
-                let mut line = String::new();
-                if let Err(err) = stream.read_line(&mut line).await {
-                    error!("failed to read command: {}", err);
-                    let _ = stream.write_all("bad request".as_ref()).await;
-                    return;
-                }
-
-                // Combine the peeked byte with the rest of the line
-                cmd.push_str(&line);
-
-                // Process using the old line-based protocol
-                let response = match Self::process(cmd, &mut stream, zinit).await {
-                    // When process returns None means we can terminate without
-                    // writing any result to the socket.
-                    Ok(None) => return,
-                    Ok(Some(body)) => ZinitResponse {
-                        body,
-                        state: ZinitState::Ok,
-                    },
-                    Err(err) => ZinitResponse {
-                        state: ZinitState::Error,
-                        body: encoder::to_value(format!("{}", err)).unwrap(),
-                    },
-                };
-
-                let value = match encoder::to_vec(&response) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        debug!("failed to create response: {}", err);
-                        return;
-                    }
-                };
-
-                if let Err(err) = stream.write_all(&value).await {
-                    error!("failed to send response to client: {}", err);
-                };
-
-                // Add a newline character to indicate the end of the response
-                if let Err(err) = stream.write_all(b"\n").await {
-                    error!("failed to send newline: {}", err);
-                };
-
-                let _ = stream.flush().await;
-            }
-            Err(err) => {
-                error!("failed to read request: {}", err);
-                let _ = stream.write_all("bad request".as_ref()).await;
-            }
-        }
-    }
-
-    async fn process(
-        cmd: String,
-        stream: &mut BufStream<UnixStream>,
-        zinit: ZInit,
-    ) -> Result<Option<Value>> {
-        let parts = match shlex::split(&cmd) {
-            Some(parts) => parts,
-            None => bail!("invalid command syntax"),
-        };
-
-        if parts.is_empty() {
-            bail!("unknown command");
-        }
-
-        if &parts[0] == "log" {
-            match parts.len() {
-                1 => Self::log(stream, zinit, true).await,
-                2 if parts[1] == "snapshot" => Self::log(stream, zinit, false).await,
-                _ => bail!("invalid log command arguments"),
-            }?;
-
-            return Ok(None);
-        }
-
-        let value = match parts[0].as_ref() {
-            "list" => Self::list(zinit).await,
-            "shutdown" => Self::shutdown(zinit).await,
-            "reboot" => Self::reboot(zinit).await,
-            "start" if parts.len() == 2 => Self::start(&parts[1], zinit).await,
-            "stop" if parts.len() == 2 => Self::stop(&parts[1], zinit).await,
-            "kill" if parts.len() == 3 => Self::kill(&parts[1], &parts[2], zinit).await,
-            "status" if parts.len() == 2 => Self::status(&parts[1], zinit).await,
-            "forget" if parts.len() == 2 => Self::forget(&parts[1], zinit).await,
-            "monitor" if parts.len() == 2 => Self::monitor(&parts[1], zinit).await,
-            _ => bail!("unknown command '{}' or wrong arguments count", parts[0]),
-        }?;
-
-        Ok(Some(value))
-    }
 
     async fn log(stream: &mut BufStream<UnixStream>, zinit: ZInit, follow: bool) -> Result<Value> {
         let mut logs = zinit.logs(follow).await;
@@ -742,6 +653,8 @@ impl Api {
         Ok(encoder::to_value(result)?)
     }
 
+    // THESE FUNCTIONS ARE FOR SERVICE FILE MANAGEMENT AND THUS NOT DIRECTLY RELATED TO THE ZINIT INSTANCE
+    // --> thats why the zinit argument is not necessary here! --> TODO: remove it!
     async fn create_service<S: AsRef<str>>(
         name: S,
         content: &serde_json::Map<String, Value>,
@@ -864,23 +777,6 @@ impl Client {
 
     // Send a JSON-RPC request and return the result
     async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        // First try JSON-RPC
-        let result = self.try_jsonrpc(method, params.clone()).await;
-        
-        // If JSON-RPC fails, try legacy protocol
-        if let Err(e) = &result {
-            if e.to_string().contains("Invalid JSON-RPC response") ||
-               e.to_string().contains("Failed to parse") {
-                debug!("JSON-RPC failed, trying legacy protocol: {}", e);
-                return self.try_legacy_protocol(method, params).await;
-            }
-        }
-        
-        result
-    }
-    
-    // Try using JSON-RPC protocol
-    async fn try_jsonrpc(&self, method: &str, params: Option<Value>) -> Result<Value> {
         // Get a unique ID for this request
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
@@ -899,6 +795,8 @@ impl Client {
         con.flush().await?;
 
         // Read and parse the response
+        // The server sends a JSON response followed by a newline character
+        // We need to read the entire response until we find the terminating newline
         let mut buffer = Vec::new();
         let mut temp_buf = [0u8; 1024];
 
@@ -933,137 +831,8 @@ impl Client {
         }
     }
 
-    // Try to use the legacy protocol as a fallback
-    async fn try_legacy_protocol(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        // Convert JSON-RPC method and params to legacy command
-        let cmd = match method {
-            "service.list" => "list".to_string(),
-            "system.shutdown" => "shutdown".to_string(),
-            "system.reboot" => "reboot".to_string(),
-            "service.status" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        format!("status {}", name)
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "service.start" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        format!("start {}", name)
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "service.stop" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        format!("stop {}", name)
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "service.forget" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        format!("forget {}", name)
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "service.monitor" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        format!("monitor {}", name)
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "service.kill" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        if let Some(signal) = params.get("signal").and_then(|v| v.as_str()) {
-                            format!("kill {} {}", name, signal)
-                        } else {
-                            bail!("Missing or invalid 'signal' parameter");
-                        }
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "service.create" => {
-                // The legacy protocol doesn't directly support service creation
-                bail!("Service creation not supported in legacy protocol");
-            },
-            "service.delete" => {
-                // The legacy protocol doesn't directly support service deletion
-                bail!("Service deletion not supported in legacy protocol");
-            },
-            "service.get" => {
-                // The legacy protocol doesn't directly support getting service config
-                bail!("Getting service configuration not supported in legacy protocol");
-            },
-            "rpc.discover" => {
-                // This is a JSON-RPC specific method with no legacy equivalent
-                bail!("RPC discovery not supported in legacy protocol");
-            },
-            "service.restart" => {
-                if let Some(params) = params {
-                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
-                        format!("restart {}", name)
-                    } else {
-                        bail!("Missing or invalid 'name' parameter");
-                    }
-                } else {
-                    bail!("Missing parameters");
-                }
-            },
-            "log" => {
-                if let Some(params) = params {
-                    if let Some(filter) = params.get("filter").and_then(|v| v.as_str()) {
-                        if let Some(snapshot) = params.get("snapshot").and_then(|v| v.as_bool()) {
-                            if snapshot {
-                                format!("log snapshot {}", filter)
-                            } else {
-                                format!("log {}", filter)
-                            }
-                        } else {
-                            format!("log {}", filter)
-                        }
-                    } else {
-                        "log".to_string()
-                    }
-                } else {
-                    "log".to_string()
-                }
-            },
-            _ => bail!("Unsupported method for legacy protocol: {}", method),
-        };
-
-        // Use the command method to send the legacy command
-        self.command(&cmd).await
-    }
-
-    // Command method for the legacy protocol
+    // Keep the original command method for backward compatibility if needed
+    #[allow(dead_code)]
     async fn command(&self, c: &str) -> Result<Value> {
         let mut con = BufStream::new(self.connect().await?);
 

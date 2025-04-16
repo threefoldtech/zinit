@@ -1,7 +1,11 @@
+extern crate serde;
+#[macro_use]
+extern crate anyhow;
+#[macro_use]
+extern crate log;
+extern crate tokio;
+
 pub mod app;
 pub mod manager;
+pub mod testapp;
 pub mod zinit;
-pub use app::types::{Status, ZinitResponse, ZinitState};
-pub use app::api_trait::{
-    ZinitRpcApiClient, ZinitServiceApiClient, ZinitSystemApiClient, ZinitLoggingApiClient,
-};

@@ -6,7 +6,6 @@ pub mod service;
 pub mod state;
 pub mod types;
 
-use jsonrpsee::tracing::debug;
 // Re-export commonly used items
 pub use service::ZInitStatus;
 pub use state::State;

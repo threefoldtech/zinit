@@ -1,6 +1,6 @@
 # Zinit Client Library
 
-A Rust client library for interacting with the Zinit process manager using the JSON-RPC API.
+A simple Rust client library for interacting with the Zinit process manager.
 
 ## Features
 
@@ -23,7 +23,7 @@ zinit-client = "0.1.0"
 
 ### Creating a Client
 
-The library supports two transport methods:
+You can create a client using either Unix socket or HTTP transport:
 
 ```rust
 use zinit_client::Client;
@@ -31,7 +31,7 @@ use zinit_client::Client;
 // Using Unix socket (local only)
 let client = Client::unix_socket("/var/run/zinit.sock");
 
-// Using HTTP (works for remote Zinit instances via zinit-http)
+// Using HTTP (works for remote Zinit instances)
 let client = Client::http("http://localhost:8080");
 ```
 
@@ -44,48 +44,48 @@ for (name, state) in services {
     println!("{}: {}", name, state);
 }
 
-// Get detailed status of a specific service
-let status = client.status("redis").await?;
+// Get status of a specific service
+let status = client.status("my-service").await?;
 println!("PID: {}, State: {}", status.pid, status.state);
 
 // Start a service
-client.start("redis").await?;
+client.start("my-service").await?;
 
 // Stop a service
-client.stop("redis").await?;
+client.stop("my-service").await?;
 
-// Monitor a service (load config and start managing it)
-client.monitor("redis").await?;
+// Restart a service
+client.restart("my-service").await?;
 
-// Forget a service (stop tracking it)
-client.forget("redis").await?;
+// Monitor a service
+client.monitor("my-service").await?;
+
+// Forget a service
+client.forget("my-service").await?;
 
 // Send a signal to a service
-client.kill("redis", "SIGTERM").await?;
+client.kill("my-service", "SIGTERM").await?;
 ```
 
-### Service Configuration Management
+### Service Configuration
 
 ```rust
 use serde_json::json;
 
-// Create a new service configuration
+// Create a new service
 let config = json!({
-    "exec": "/usr/bin/nginx",
+    "exec": "nginx",
     "oneshot": false,
-    "after": ["network"],
-    "env": {
-        "NGINX_OPTS": "-c /etc/nginx/custom.conf"
-    }
+    "after": ["network"]
 }).as_object().unwrap().clone();
 
 client.create_service("nginx", config).await?;
 
-// Get a service's configuration
+// Get service configuration
 let config = client.get_service("nginx").await?;
-println!("Exec command: {}", config.get("exec").unwrap());
+println!("Config: {:?}", config);
 
-// Delete a service configuration
+// Delete a service
 client.delete_service("nginx").await?;
 ```
 
@@ -101,7 +101,7 @@ client.reboot().await?;
 
 ## Error Handling
 
-The library provides a `ClientError` enum for handling various error conditions:
+The library provides a `ClientError` enum for handling errors:
 
 ```rust
 match client.status("non-existent-service").await {
@@ -109,62 +109,15 @@ match client.status("non-existent-service").await {
     Err(e) => match e {
         ClientError::ServiceNotFound(_) => println!("Service not found"),
         ClientError::ConnectionError(_) => println!("Failed to connect to Zinit"),
-        ClientError::ServiceIsUp(_) => println!("Service is already running"),
-        ClientError::ServiceIsDown(_) => println!("Service is not running"),
         _ => println!("Other error: {}", e),
     },
 }
 ```
 
-## Complete Example
+## Examples
 
-```rust
-use zinit_client::Client;
-use anyhow::Result;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Create a client using Unix socket
-    let client = Client::unix_socket("/var/run/zinit.sock");
-    
-    // List all services and their states
-    let services = client.list().await?;
-    println!("Services:");
-    for (name, state) in services {
-        println!("  {}: {}", name, state);
-    }
-    
-    // Try to start a service
-    match client.start("my-service").await {
-        Ok(_) => println!("Service started successfully"),
-        Err(e) => println!("Failed to start service: {}", e),
-    }
-    
-    Ok(())
-}
-```
-
-## HTTP Client Example
-
-```rust
-use zinit_client::Client;
-use anyhow::Result;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Create a client using HTTP (requires zinit-http to be running)
-    let client = Client::http("http://localhost:8080");
-    
-    // Get status of a specific service
-    let status = client.status("redis").await?;
-    println!("Redis service: {}", status.state);
-    
-    Ok(())
-}
-```
-
-For more examples, see the [examples](examples) directory.
+See the [examples](examples) directory for complete usage examples.
 
 ## License
 
-This project is licensed under the Apache 2.0 License.
+This project is licensed under the MIT License.

@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use command_group::CommandGroup;
-use jsonrpsee::tracing::{debug, error, info};
 use nix::sys::signal;
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd::Pid;
@@ -171,8 +170,6 @@ impl ProcessManager {
 
         let mut table = self.table.lock().await;
 
-        // FIXME: properly add child to `Child`-struct, so .wait() can be called
-        #[allow(clippy::zombie_processes)]
         let mut child = child
             .group_spawn()
             .context("failed to spawn command")?

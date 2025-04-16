@@ -1,18 +1,11 @@
-pub mod client;
-pub mod server;
-pub mod types;
-pub mod api_trait;
+pub mod api;
 
-use self::client::Client;
-use self::server::Api;
 use crate::zinit;
 use anyhow::{Context, Result};
 use serde_yaml as encoder;
-use std::net::SocketAddr; // Import SocketAddr
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::time;
-use log::{debug, error}; // Import log macros if not already present at top level
 
 fn logger(level: log::LevelFilter) -> Result<()> {
     let logger = fern::Dispatch::new()
@@ -64,7 +57,7 @@ pub async fn init(
         eprintln!("failed to setup logging: {}", err);
     }
 
-    let config = absolute(Path::new(config)).context("failed to get config dir absolute path")?;
+    let config = absolute(Path::new(config)).context("failed to get config dire absolute path")?;
     let socket = absolute(Path::new(socket)).context("failed to get socket file absolute path")?;
 
     if let Some(dir) = socket.parent() {
@@ -93,60 +86,51 @@ pub async fn init(
             error!("failed to monitor service {}: {}", k, err);
         };
     }
-    // Create Api instance with ZInit and the config directory path
-    let api = Api::new(init, config.clone()); // Pass config dir, not socket
-
-    // Define server addresses (consider making these configurable later)
-    let http_addr: SocketAddr = "127.0.0.1:9000".parse().expect("Failed to parse HTTP address");
-    let ws_addr: SocketAddr = "127.0.0.1:9001".parse().expect("Failed to parse WS address");
-
-    // Start the jsonrpsee server
-    let (server_handle, _bound_http_addr, _bound_ws_addr) = api.serve(http_addr, ws_addr).await?;
-
-    // Keep the server running by awaiting its handle
-    // This will block indefinitely until the server is stopped (e.g., by shutdown signal)
-    server_handle.stopped().await;
-
-    Ok(()) // This might not be reached if server runs indefinitely, but keep for structure
+    let a = api::Api::new(init, socket);
+    a.serve().await?;
+    Ok(())
 }
-// Define default URLs (consider making these configurable via args later)
-const DEFAULT_HTTP_URL: &str = "http://127.0.0.1:9000";
-const DEFAULT_WS_URL: &str = "ws://127.0.0.1:9001";
 
-pub async fn list() -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+pub async fn list(socket: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     let results = client.list().await?;
     encoder::to_writer(std::io::stdout(), &results)?;
     Ok(())
 }
-pub async fn shutdown() -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn shutdown(socket: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.shutdown().await?;
     Ok(())
 }
-pub async fn reboot() -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn reboot(socket: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.reboot().await?;
     Ok(())
 }
-pub async fn status(name: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn status(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     let results = client.status(name).await?;
     encoder::to_writer(std::io::stdout(), &results)?;
     Ok(())
 }
-pub async fn start(name: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn start(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.start(name).await?;
     Ok(())
 }
-pub async fn stop(name: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn stop(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.stop(name).await?;
     Ok(())
 }
-pub async fn restart(name: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn restart(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.stop(name).await?;
     //pull status
     for _ in 0..20 {
@@ -162,24 +146,26 @@ pub async fn restart(name: &str) -> Result<()> {
     client.start(name).await?;
     Ok(())
 }
-pub async fn forget(name: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn forget(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.forget(name).await?;
     Ok(())
 }
-pub async fn monitor(name: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn monitor(socket: &str, name: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.monitor(name).await?;
     Ok(())
 }
-pub async fn kill(name: &str, signal: &str) -> Result<()> {
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+
+pub async fn kill(socket: &str, name: &str, signal: &str) -> Result<()> {
+    let client = api::Client::new(socket);
     client.kill(name, signal).await?;
     Ok(())
 }
-pub async fn logs(filter: Option<&str>, follow: bool) -> Result<()> {
-    // Logs uses WebSocket, so we pass the WS URL
-    let client = Client::new(DEFAULT_HTTP_URL.to_string(), DEFAULT_WS_URL.to_string());
+pub async fn logs(socket: &str, filter: Option<&str>, follow: bool) -> Result<()> {
+    let client = api::Client::new(socket);
     if let Some(filter) = filter {
         client.status(filter).await?;
     }
