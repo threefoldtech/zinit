@@ -1,25 +1,15 @@
 use crate::zinit::{config, ZInit};
 use anyhow::{bail, Context, Result};
-use axum::{
-    body::Bytes,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    routing::{options, post},
-    Router,
-};
 use nix::sys::signal;
 use serde::{Deserialize, Serialize};
 use serde_json::{self as encoder, Value};
 use std::collections::HashMap;
 use std::marker::Unpin;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::{TcpListener, UnixListener, UnixStream};
-
-// Include the OpenRPC specification
-const OPENRPC_SPEC: &str = include_str!("../../openrpc.json");
+use tokio::net::{UnixListener, UnixStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // JSON-RPC 2.0 structures
 #[derive(Debug, Deserialize, Serialize)]
@@ -94,9 +84,8 @@ pub struct Status {
 }
 
 pub struct Api {
-    zinit: ZInit,
+    pub zinit: ZInit,
     socket: PathBuf,
-    // http_port removed as it's now in a separate binary
 }
 
 impl Api {
@@ -750,7 +739,6 @@ impl Api {
     }
 }
 
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct Client {
     socket: PathBuf,

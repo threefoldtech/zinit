@@ -1,4 +1,5 @@
 pub mod api;
+pub mod rpc;
 
 use crate::zinit;
 use anyhow::{Context, Result};
