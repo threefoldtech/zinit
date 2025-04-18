@@ -3,10 +3,17 @@ pub mod rpc;
 
 use crate::zinit;
 use anyhow::{Context, Result};
+use api::ApiServer;
+use reth_ipc::client::IpcClientBuilder;
+use rpc::ZinitLoggingApiClient;
+use rpc::ZinitServiceApiClient;
+use rpc::ZinitSystemApiClient;
 use serde_yaml as encoder;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::time;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::Stream;
 
 fn logger(level: log::LevelFilter) -> Result<()> {
     let logger = fern::Dispatch::new()
@@ -48,7 +55,7 @@ pub async fn init(
     socket: &str,
     container: bool,
     debug: bool,
-) -> Result<()> {
+) -> Result<ApiServer> {
     //std::fs::create_dir_all(config)?;
     if let Err(err) = logger(if debug {
         log::LevelFilter::Debug
@@ -59,9 +66,10 @@ pub async fn init(
     }
 
     let config = absolute(Path::new(config)).context("failed to get config dire absolute path")?;
-    let socket = absolute(Path::new(socket)).context("failed to get socket file absolute path")?;
+    let socket_path =
+        absolute(Path::new(socket)).context("failed to get socket file absolute path")?;
 
-    if let Some(dir) = socket.parent() {
+    if let Some(dir) = socket_path.parent() {
         fs::create_dir_all(dir)
             .await
             .with_context(|| format!("failed to create directory {:?}", dir))?;
@@ -87,88 +95,124 @@ pub async fn init(
             error!("failed to monitor service {}: {}", k, err);
         };
     }
-    let a = api::Api::new(init, socket);
-    a.serve().await?;
-    Ok(())
+    let a = api::Api::new(init);
+    a.serve(socket.into()).await
 }
 
 pub async fn list(socket: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     let results = client.list().await?;
     encoder::to_writer(std::io::stdout(), &results)?;
     Ok(())
 }
 
 pub async fn shutdown(socket: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.shutdown().await?;
     Ok(())
 }
 
 pub async fn reboot(socket: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.reboot().await?;
     Ok(())
 }
 
-pub async fn status(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+pub async fn status(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     let results = client.status(name).await?;
     encoder::to_writer(std::io::stdout(), &results)?;
     Ok(())
 }
 
-pub async fn start(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+pub async fn start(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.start(name).await?;
     Ok(())
 }
 
-pub async fn stop(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+pub async fn stop(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.stop(name).await?;
     Ok(())
 }
 
-pub async fn restart(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
-    client.stop(name).await?;
+pub async fn restart(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
+    client.stop(name.clone()).await?;
     //pull status
     for _ in 0..20 {
-        let result = client.status(name).await?;
+        let result = client.status(name.clone()).await?;
         if result.pid == 0 && result.target == "Down" {
-            client.start(name).await?;
+            client.start(name.clone()).await?;
             return Ok(());
         }
         time::sleep(std::time::Duration::from_secs(1)).await;
     }
     // process not stopped try to kill it
-    client.kill(name, "SIGKILL").await?;
+    client.kill(name.clone(), "SIGKILL".into()).await?;
     client.start(name).await?;
     Ok(())
 }
 
-pub async fn forget(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+pub async fn forget(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.forget(name).await?;
     Ok(())
 }
 
-pub async fn monitor(socket: &str, name: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+pub async fn monitor(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.monitor(name).await?;
     Ok(())
 }
 
-pub async fn kill(socket: &str, name: &str, signal: &str) -> Result<()> {
-    let client = api::Client::new(socket);
+pub async fn kill(socket: &str, name: String, signal: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
     client.kill(name, signal).await?;
     Ok(())
 }
-pub async fn logs(socket: &str, filter: Option<&str>, follow: bool) -> Result<()> {
-    let client = api::Client::new(socket);
-    if let Some(filter) = filter {
-        client.status(filter).await?;
+
+pub async fn logs(socket: &str, filter: Option<String>, follow: bool) -> Result<impl Stream<Item = String> + Unpin> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
+    if let Some(ref filter) = filter {
+        client.status(filter.clone()).await?;
     }
-    client.logs(tokio::io::stdout(), filter, follow).await
+    let logs = client.logs(filter.clone()).await?;
+    let (tx, rx) = tokio::sync::mpsc::channel(2000);
+
+    let logs_sub = if follow {
+        Some(client.log_subscribe(filter).await?)
+    } else {
+        None
+    };
+    tokio::task::spawn(async move {
+        for log in logs {
+            if tx.send(log).await.is_err() {
+                if let Some(logs_sub) = logs_sub {
+                    let _ = logs_sub.unsubscribe().await;
+                }
+                // error means receiver is dead, so just quit
+                return;
+            }
+        }
+        let Some(mut logs_sub) = logs_sub else { return };
+        loop {
+            match logs_sub.next().await {
+                Some(Ok(log)) => {
+                    if tx.send(log).await.is_err() {
+                        let _ = logs_sub.unsubscribe().await;
+                        return
+                    }
+                }
+                Some(Err(e)) => {
+                    log::error!("Failed to get new log from subscription: {e}");
+                    return;
+                }
+                _ => return,
+            }
+        }
+    });
+
+    Ok(ReceiverStream::new(rx))
 }

@@ -13,8 +13,8 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-tokio = { version = "1.14.0", features = ["full"] }
-tokio-stream = { version = "0.1.8", features = ["sync"] }
+tokio = { version = "1.44.1", features = ["full"] }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
 shlex ="1.1"
 nix = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
@@ -29,9 +29,10 @@ command-group = "1.0.8"
 hyper = "1.6.0"
 axum = { version = "0.7.4", features = ["http1"] }
 bytes = "1.0"
-jsonrpsee = { version = "0.24.9", features = ["server", "client", "macros", "jsonrpsee-types"] }
+jsonrpsee = { version = "0.24.9", features = ["server", "client", "macros"] }
 memchr = "2.5.0"
 async-trait = "0.1.88"
+reth-ipc = { git = "https://github.com/paradigmxyz/reth", package = "reth-ipc" }
 
 [dev-dependencies]
 tokio = { version = "1.14.0", features = ["full", "test-util"] }

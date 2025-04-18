@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::{App, Arg, SubCommand};
 use git_version::git_version;
 
+use tokio_stream::StreamExt;
 use zinit::app;
 
 const GIT_VERSION: &str = git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
@@ -150,48 +151,72 @@ async fn main() -> Result<()> {
     //let debug = true;
     let result = match matches.subcommand() {
         ("init", Some(matches)) => {
-            app::init(
+            let _server = app::init(
                 matches.value_of("buffer").unwrap().parse().unwrap(),
                 matches.value_of("config").unwrap(),
                 socket,
                 matches.is_present("container"),
                 debug,
             )
-            .await
+            .await?;
+            tokio::signal::ctrl_c().await?;
+            Ok(())
         }
         ("list", _) => app::list(socket).await,
         ("shutdown", _) => app::shutdown(socket).await,
         ("reboot", _) => app::reboot(socket).await,
         // ("log", Some(matches)) => app::log(matches.value_of("filter")),
         ("status", Some(matches)) => {
-            app::status(socket, matches.value_of("service").unwrap()).await
+            app::status(socket, matches.value_of("service").unwrap().to_string()).await
         }
-        ("stop", Some(matches)) => app::stop(socket, matches.value_of("service").unwrap()).await,
-        ("start", Some(matches)) => app::start(socket, matches.value_of("service").unwrap()).await,
+        ("stop", Some(matches)) => {
+            app::stop(socket, matches.value_of("service").unwrap().to_string()).await
+        }
+        ("start", Some(matches)) => {
+            app::start(socket, matches.value_of("service").unwrap().to_string()).await
+        }
         ("forget", Some(matches)) => {
-            app::forget(socket, matches.value_of("service").unwrap()).await
+            app::forget(socket, matches.value_of("service").unwrap().to_string()).await
         }
         ("monitor", Some(matches)) => {
-            app::monitor(socket, matches.value_of("service").unwrap()).await
+            app::monitor(socket, matches.value_of("service").unwrap().to_string()).await
         }
         ("kill", Some(matches)) => {
             app::kill(
                 socket,
-                matches.value_of("service").unwrap(),
-                matches.value_of("signal").unwrap(),
+                matches.value_of("service").unwrap().to_string(),
+                matches.value_of("signal").unwrap().to_string(),
             )
             .await
         }
         ("log", Some(matches)) => {
-            app::logs(
+            let mut stream = app::logs(
                 socket,
-                matches.value_of("filter"),
+                matches.value_of("filter").map(|s| s.to_string()),
                 !matches.is_present("snapshot"),
             )
-            .await
+            .await?;
+
+            loop {
+                tokio::select! {
+                    item = stream.next() => {
+                        match item {
+                            Some(log_entry) => {
+                                println!("{}", log_entry);
+                            },
+                            None => break
+                        }
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        break
+                    }
+                }
+            }
+
+            Ok(())
         }
         ("restart", Some(matches)) => {
-            app::restart(socket, matches.value_of("service").unwrap()).await
+            app::restart(socket, matches.value_of("service").unwrap().to_string()).await
         }
         _ => app::list(socket).await, // default command
     };

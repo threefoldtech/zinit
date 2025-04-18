@@ -3,7 +3,7 @@ name = "zinit-client"
 version = "0.1.0"
 edition = "2021"
 description = "A client library for interacting with Zinit process manager"
-license = "MIT"
+license = "Apache 2.0"
 authors = ["ThreeFold Tech, https://github.com/threefoldtech"]
 
 [dependencies]
