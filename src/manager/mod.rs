@@ -138,8 +138,8 @@ impl ProcessManager {
         });
     }
 
-    pub async fn stream(&self, follow: bool) -> Logs {
-        self.ring.stream(follow).await
+    pub async fn stream(&self, existing_logs: bool, follow: bool) -> Logs {
+        self.ring.stream(existing_logs, follow).await
     }
 
     pub fn signal(&self, pid: Pid, sig: signal::Signal) -> Result<()> {

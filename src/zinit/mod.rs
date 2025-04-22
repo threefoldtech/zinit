@@ -61,8 +61,9 @@ impl ZInit {
     }
 
     /// Get logs from the process manager
-    pub async fn logs(&self, follow: bool) -> Logs {
-        self.lifecycle.logs(follow).await
+    /// `existing_logs` TODO:
+    pub async fn logs(&self, existing_logs: bool, follow: bool) -> Logs {
+        self.lifecycle.logs(existing_logs, follow).await
     }
 
     /// Monitor a service

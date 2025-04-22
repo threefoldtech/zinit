@@ -5,7 +5,6 @@ use serde_json::json;
 use std::env;
 use tokio::time::{sleep, Duration};
 
-use zinit::app::api::Client;
 use zinit::testapp;
 
 #[tokio::main]

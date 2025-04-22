@@ -77,8 +77,8 @@ impl LifecycleManager {
     }
 
     /// Get logs from the process manager
-    pub async fn logs(&self, follow: bool) -> Logs {
-        self.pm.stream(follow).await
+    pub async fn logs(&self, existing_logs: bool, follow: bool) -> Logs {
+        self.pm.stream(existing_logs, follow).await
     }
 
     /// Monitor a service

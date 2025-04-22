@@ -3,7 +3,6 @@ extern crate zinit;
 use anyhow::Result;
 use clap::{App, Arg};
 use git_version::git_version;
-use zinit::app::api::Client;
 
 const GIT_VERSION: &str = git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
 

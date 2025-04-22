@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
 use tokio::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::rpc::{ZinitRpcApiServer, ZinitServiceApiServer, ZinitSystemApiServer};
+use super::rpc::{ZinitLoggingApiServer, ZinitRpcApiServer, ZinitServiceApiServer, ZinitSystemApiServer};
 
 // JSON-RPC 2.0 structures
 #[derive(Debug, Deserialize, Serialize)]
@@ -89,8 +89,15 @@ impl Api {
         let mut module = ZinitRpcApiServer::into_rpc(self.clone());
         module.merge(ZinitSystemApiServer::into_rpc(self.clone()))?;
         module.merge(ZinitServiceApiServer::into_rpc(self.clone()))?;
+        module.merge(ZinitLoggingApiServer::into_rpc(self.clone()))?;
+
 
         let _handle = server.start(module).await?;
+
+        // TODO: ipv van server nen ipcserver, da moet gewoon nen jsonrpsee server buidler (voor http  +ws ) en die spawnt 
+        // TODO: niewwe handle, terug alles merges, 
+        // let server_rpc = jsonrpsee::server::ServerBuilder::default().build()
+
         
         Ok(ApiServer { _handle })
     }
