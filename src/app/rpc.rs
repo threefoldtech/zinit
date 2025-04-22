@@ -24,10 +24,10 @@ const SERVICE_FILE_ERROR: i32 = -32008;
 const OPENRPC_SPEC: &str = include_str!("../../openrpc.json");
 
 /// RPC methods for discovery.
-#[rpc(server, client, namespace = "rpc")]
+#[rpc(server, client)]
 pub trait ZinitRpcApi {
     /// Returns the OpenRPC specification as a JSON Value.
-    #[method(name = "discover")]
+    #[method(name = "rpc.discover")]
     async fn discover(&self) -> RpcResult<Value>;
 }
 
