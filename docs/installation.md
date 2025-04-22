@@ -108,6 +108,7 @@ make docker
 # Run the container
 docker run -dt --device=/dev/kmsg:/dev/kmsg:rw zinit
 ```
+> Don't forget to port-forward a port to get access to the Zinit proxy using the `-p XXXX:YYYY` flag when running the container.
 
 ### Custom Docker Setup
 

@@ -3,45 +3,11 @@ use anyhow::{bail, Context, Result};
 use jsonrpsee::server::ServerHandle;
 use reth_ipc::server::Builder;
 use serde::{Deserialize, Serialize};
-use serde_json::{self as encoder, Value};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::marker::Unpin;
-use std::path::{Path, PathBuf};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::UnixStream;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use super::rpc::{ZinitLoggingApiServer, ZinitRpcApiServer, ZinitServiceApiServer, ZinitSystemApiServer};
-
-// JSON-RPC 2.0 structures
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcRequest {
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
-    params: Option<Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct JsonRpcError {
-    code: i32,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
-}
-
-// JSON-RPC error codes
-
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,12 +40,14 @@ pub struct ApiServer {
 #[derive(Clone)]
 pub struct Api {
     pub zinit: ZInit,
+    pub http_server_handle: Arc<Mutex<Option<jsonrpsee::server::ServerHandle>>>,
 }
 
 impl Api {
     pub fn new(zinit: ZInit) -> Api {
         Api {
             zinit,
+            http_server_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -94,11 +62,46 @@ impl Api {
 
         let _handle = server.start(module).await?;
 
-        // TODO: ipv van server nen ipcserver, da moet gewoon nen jsonrpsee server buidler (voor http  +ws ) en die spawnt 
-        // TODO: niewwe handle, terug alles merges, 
-        // let server_rpc = jsonrpsee::server::ServerBuilder::default().build()
-
-        
         Ok(ApiServer { _handle })
+    }
+    
+    /// Start an HTTP/RPC server at a specified address
+    pub async fn start_http_server(&self, address: String) -> Result<String> {
+        // Parse the address string
+        let socket_addr = address.parse::<std::net::SocketAddr>()
+            .context("Failed to parse socket address")?;
+            
+        // Create the JSON-RPC server
+        let server_rpc = jsonrpsee::server::ServerBuilder::default()
+            .build(socket_addr)
+            .await?;
+            
+        // Create and merge all API modules
+        let mut rpc_module = ZinitRpcApiServer::into_rpc(self.clone());
+        rpc_module.merge(ZinitSystemApiServer::into_rpc(self.clone()))?;
+        rpc_module.merge(ZinitServiceApiServer::into_rpc(self.clone()))?;
+        rpc_module.merge(ZinitLoggingApiServer::into_rpc(self.clone()))?;
+
+        // Start the server
+        let handle = server_rpc.start(rpc_module);
+        
+        // Store the handle
+        let mut http_handle = self.http_server_handle.lock().await;
+        *http_handle = Some(handle);
+        
+        Ok(format!("HTTP/RPC server started at {}", address))
+    }
+    
+    /// Stop the HTTP/RPC server if running
+    pub async fn stop_http_server(&self) -> Result<()> {
+        let mut http_handle = self.http_server_handle.lock().await;
+        
+        if http_handle.is_some() {
+            // The handle is automatically dropped, which should stop the server
+            *http_handle = None;
+            Ok(())
+        } else {
+            bail!("No HTTP/RPC server is currently running")
+        }
     }
 }

@@ -144,6 +144,18 @@ async fn main() -> Result<()> {
                 )
                 .about("restart a service."),
         )
+        .subcommand(
+            SubCommand::with_name("proxy")
+                .arg(
+                    Arg::with_name("address")
+                        .value_name("ADDRESS")
+                        .short("a")
+                        .long("address")
+                        .default_value("127.0.0.1:8080")
+                        .help("address to bind the HTTP/RPC server to"),
+                )
+                .about("start an HTTP/RPC proxy for Zinit API"),
+        )
         .get_matches();
 
     let socket = matches.value_of("socket").unwrap();
@@ -217,6 +229,9 @@ async fn main() -> Result<()> {
         }
         ("restart", Some(matches)) => {
             app::restart(socket, matches.value_of("service").unwrap().to_string()).await
+        }
+        ("proxy", Some(matches)) => {
+            app::proxy(socket, matches.value_of("address").unwrap().to_string()).await
         }
         _ => app::list(socket).await, // default command
     };

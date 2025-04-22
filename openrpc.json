@@ -16,7 +16,7 @@
   ],
   "methods": [
     {
-      "name": "rpc.discover",
+      "name": "rpc_discover",
       "description": "Returns the OpenRPC specification for the API",
       "params": [],
       "result": {
@@ -44,7 +44,7 @@
       ]
     },
     {
-      "name": "service.list",
+      "name": "service_list",
       "description": "Lists all services managed by Zinit",
       "params": [],
       "result": {
@@ -74,7 +74,7 @@
       ]
     },
     {
-      "name": "service.status",
+      "name": "service_status",
       "description": "Shows detailed status information for a specific service",
       "params": [
         {
@@ -152,7 +152,7 @@
       ]
     },
     {
-      "name": "service.start",
+      "name": "service_start",
       "description": "Starts a service",
       "params": [
         {
@@ -195,7 +195,7 @@
       ]
     },
     {
-      "name": "service.stop",
+      "name": "service_stop",
       "description": "Stops a service",
       "params": [
         {
@@ -243,7 +243,7 @@
       ]
     },
     {
-      "name": "service.monitor",
+      "name": "service_monitor",
       "description": "Starts monitoring a service. The service configuration is loaded from the config directory.",
       "params": [
         {
@@ -291,7 +291,7 @@
       ]
     },
     {
-      "name": "service.forget",
+      "name": "service_forget",
       "description": "Stops monitoring a service. You can only forget a stopped service.",
       "params": [
         {
@@ -339,7 +339,7 @@
       ]
     },
     {
-      "name": "service.kill",
+      "name": "service_kill",
       "description": "Sends a signal to a running service",
       "params": [
         {
@@ -404,7 +404,7 @@
       ]
     },
     {
-      "name": "system.shutdown",
+      "name": "system_shutdown",
       "description": "Stops all services and powers off the system",
       "params": [],
       "result": {
@@ -433,7 +433,7 @@
       ]
     },
     {
-      "name": "system.reboot",
+      "name": "system_reboot",
       "description": "Stops all services and reboots the system",
       "params": [],
       "result": {
@@ -462,7 +462,7 @@
       ]
     },
     {
-      "name": "service.create",
+      "name": "service_create",
       "description": "Creates a new service configuration file",
       "params": [
         {
@@ -536,7 +536,7 @@
       ]
     },
     {
-      "name": "service.delete",
+      "name": "service_delete",
       "description": "Deletes a service configuration file",
       "params": [
         {
@@ -569,7 +569,7 @@
       ]
     },
     {
-      "name": "service.get",
+      "name": "service_get",
       "description": "Gets a service configuration file",
       "params": [
         {
@@ -600,10 +600,175 @@
           "data": "Failed to read service file"
         }
       ]
+    },
+    {
+      "name": "system_start_http_server",
+      "description": "Start an HTTP/RPC server at the specified address",
+      "params": [
+        {
+          "name": "address",
+          "description": "The network address to bind the server to (e.g., '127.0.0.1:8080')",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StartHttpServerResult",
+        "description": "Result of the start HTTP server operation",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "examples": [
+        {
+          "name": "Start HTTP server on localhost:8080",
+          "params": [
+            {
+              "name": "address",
+              "value": "127.0.0.1:8080"
+            }
+          ],
+          "result": {
+            "name": "StartHttpServerResult",
+            "value": "HTTP server started at 127.0.0.1:8080"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid address",
+          "data": "Invalid network address format"
+        }
+      ]
+    },
+    {
+      "name": "system_stop_http_server",
+      "description": "Stop the HTTP/RPC server if running",
+      "params": [],
+      "result": {
+        "name": "StopHttpServerResult",
+        "description": "Result of the stop HTTP server operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Stop the HTTP server",
+          "params": [],
+          "result": {
+            "name": "StopHttpServerResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Server not running",
+          "data": "No HTTP server is currently running"
+        }
+      ]
+    },
+    {
+      "name": "stream_currentLogs",
+      "description": "Get current logs from zinit and monitored services",
+      "params": [
+        {
+          "name": "name",
+          "description": "Optional service name filter. If provided, only logs from this service will be returned",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "LogsResult",
+        "description": "Array of log strings",
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "Get all logs",
+          "params": [],
+          "result": {
+            "name": "LogsResult",
+            "value": [
+              "2023-01-01T12:00:00 redis: Starting service",
+              "2023-01-01T12:00:01 nginx: Starting service"
+            ]
+          }
+        },
+        {
+          "name": "Get logs for a specific service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "LogsResult",
+            "value": [
+              "2023-01-01T12:00:00 redis: Starting service",
+              "2023-01-01T12:00:02 redis: Service started"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "stream_subscribeLogs",
+      "description": "Subscribe to log messages generated by zinit and monitored services",
+      "params": [
+        {
+          "name": "name",
+          "description": "Optional service name filter. If provided, only logs from this service will be returned",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "LogSubscription",
+        "description": "A subscription to log messages",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "examples": [
+        {
+          "name": "Subscribe to all logs",
+          "params": [],
+          "result": {
+            "name": "LogSubscription",
+            "value": "2023-01-01T12:00:00 redis: Service started"
+          }
+        },
+        {
+          "name": "Subscribe to filtered logs",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "LogSubscription",
+            "value": "2023-01-01T12:00:00 redis: Service started"
+          }
+        }
+      ]
     }
-  ],
-  "components": {
-    "contentDescriptors": {},
-    "schemas": {}
-  }
+  ]
 }

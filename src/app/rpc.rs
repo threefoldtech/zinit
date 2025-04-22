@@ -1,9 +1,9 @@
 use crate::zinit::config;
-use crate::{app::api::Status, zinit};
+use crate::app::api::Status;
 use async_trait::async_trait;
 use jsonrpsee::core::{RpcResult, SubscriptionResult};
 use jsonrpsee::proc_macros::rpc;
-use jsonrpsee::types::{ErrorCode, ErrorObject, ErrorObjectOwned};
+use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use jsonrpsee::PendingSubscriptionSink;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -12,19 +12,10 @@ use tokio_stream::StreamExt;
 
 use super::api::Api;
 
-// Standard JSON-RPC error codes
-const INVALID_REQUEST: i32 = -32600;
-const METHOD_NOT_FOUND: i32 = -32601;
-const INVALID_PARAMS: i32 = -32602;
-const INTERNAL_ERROR: i32 = -32603;
 
 // Custom error codes for Zinit
 const SERVICE_NOT_FOUND: i32 = -32000;
-const SERVICE_ALREADY_MONITORED: i32 = -32001;
 const SERVICE_IS_UP: i32 = -32002;
-const SERVICE_IS_DOWN: i32 = -32003;
-const INVALID_SIGNAL: i32 = -32004;
-const CONFIG_ERROR: i32 = -32005;
 const SHUTTING_DOWN: i32 = -32006;
 const SERVICE_ALREADY_EXISTS: i32 = -32007;
 const SERVICE_FILE_ERROR: i32 = -32008;
@@ -96,7 +87,6 @@ pub trait ZinitServiceApi {
     async fn get(&self, name: String) -> RpcResult<Value>;
 }
 
-// TODO: write an wrapper function that encapsulate internal zinit errors to an ErrorObjectOwned (to which we can pass our own error message)
 #[async_trait]
 impl ZinitServiceApiServer for Api {
     async fn list(&self) -> RpcResult<HashMap<String, String>> {
@@ -112,7 +102,7 @@ impl ZinitServiceApiServer for Api {
                 .zinit
                 .status(&service)
                 .await
-                .map_err(|e| ErrorObjectOwned::from(ErrorCode::InternalError))?;
+                .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?;
             map.insert(service, format!("{:?}", state.state));
         }
         Ok(map)
@@ -296,6 +286,14 @@ pub trait ZinitSystemApi {
     /// Initiate system reboot process.
     #[method(name = "reboot")]
     async fn reboot(&self) -> RpcResult<()>;
+    
+    /// Start an HTTP/RPC server at the specified address
+    #[method(name = "start_http_server")]
+    async fn start_http_server(&self, address: String) -> RpcResult<String>;
+    
+    /// Stop the HTTP/RPC server if running
+    #[method(name = "stop_http_server")]
+    async fn stop_http_server(&self) -> RpcResult<()>;
 }
 
 #[async_trait]
@@ -312,6 +310,22 @@ impl ZinitSystemApiServer for Api {
             .reboot()
             .await
             .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))
+    }
+    
+    async fn start_http_server(&self, address: String) -> RpcResult<String> {
+        // Call the method from the API implementation
+        match crate::app::api::Api::start_http_server(self, address).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(ErrorObjectOwned::from(ErrorCode::InternalError))
+        }
+    }
+    
+    async fn stop_http_server(&self) -> RpcResult<()> {
+        // Call the method from the API implementation
+        match crate::app::api::Api::stop_http_server(self).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err(ErrorObjectOwned::from(ErrorCode::InternalError))
+        }
     }
 }
 
