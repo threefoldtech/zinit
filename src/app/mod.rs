@@ -8,14 +8,14 @@ use reth_ipc::client::IpcClientBuilder;
 use rpc::ZinitLoggingApiClient;
 use rpc::ZinitServiceApiClient;
 use rpc::ZinitSystemApiClient;
-use std::net::ToSocketAddrs;
 use serde_yaml as encoder;
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::signal;
 use tokio::time;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
-use tokio::signal;
 
 fn logger(level: log::LevelFilter) -> Result<()> {
     let logger = fern::Dispatch::new()
@@ -175,7 +175,11 @@ pub async fn kill(socket: &str, name: String, signal: String) -> Result<()> {
     Ok(())
 }
 
-pub async fn logs(socket: &str, filter: Option<String>, follow: bool) -> Result<impl Stream<Item = String> + Unpin> {
+pub async fn logs(
+    socket: &str,
+    filter: Option<String>,
+    follow: bool,
+) -> Result<impl Stream<Item = String> + Unpin> {
     let client = IpcClientBuilder::default().build(socket.into()).await?;
     if let Some(ref filter) = filter {
         client.status(filter.clone()).await?;
@@ -204,7 +208,7 @@ pub async fn logs(socket: &str, filter: Option<String>, follow: bool) -> Result<
                 Some(Ok(log)) => {
                     if tx.send(log).await.is_err() {
                         let _ = logs_sub.unsubscribe().await;
-                        return
+                        return;
                     }
                 }
                 Some(Err(e)) => {
@@ -222,7 +226,8 @@ pub async fn logs(socket: &str, filter: Option<String>, follow: bool) -> Result<
 /// Start an HTTP/RPC proxy server for the Zinit API at the specified address
 pub async fn proxy(sock: &str, address: String) -> Result<()> {
     // Parse the socket address
-    let _socket_addr = address.to_socket_addrs()
+    let _socket_addr = address
+        .to_socket_addrs()
         .context("Failed to parse socket address")?
         .next()
         .context("No valid socket address found")?;
@@ -232,20 +237,20 @@ pub async fn proxy(sock: &str, address: String) -> Result<()> {
 
     // Connect to the existing Zinit daemon through the Unix socket
     let client = IpcClientBuilder::default().build(sock.into()).await?;
-    
+
     // Issue an RPC call to start the HTTP server on the specified address
     let result = client.start_http_server(address.clone()).await?;
-    
+
     println!("{}", result);
     println!("Press Ctrl+C to stop");
-    
+
     // Wait for Ctrl+C to shutdown
     signal::ctrl_c().await?;
-    
+
     // Shutdown the HTTP server
     client.stop_http_server().await?;
-    
+
     println!("HTTP/RPC server stopped");
-    
+
     Ok(())
 }

@@ -1,5 +1,5 @@
-use crate::zinit::config;
 use crate::app::api::Status;
+use crate::zinit::config;
 use async_trait::async_trait;
 use jsonrpsee::core::{RpcResult, SubscriptionResult};
 use jsonrpsee::proc_macros::rpc;
@@ -11,7 +11,6 @@ use std::str::FromStr;
 use tokio_stream::StreamExt;
 
 use super::api::Api;
-
 
 // Custom error codes for Zinit
 const SERVICE_NOT_FOUND: i32 = -32000;
@@ -286,11 +285,11 @@ pub trait ZinitSystemApi {
     /// Initiate system reboot process.
     #[method(name = "reboot")]
     async fn reboot(&self) -> RpcResult<()>;
-    
+
     /// Start an HTTP/RPC server at the specified address
     #[method(name = "start_http_server")]
     async fn start_http_server(&self, address: String) -> RpcResult<String>;
-    
+
     /// Stop the HTTP/RPC server if running
     #[method(name = "stop_http_server")]
     async fn stop_http_server(&self) -> RpcResult<()>;
@@ -311,20 +310,20 @@ impl ZinitSystemApiServer for Api {
             .await
             .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))
     }
-    
+
     async fn start_http_server(&self, address: String) -> RpcResult<String> {
         // Call the method from the API implementation
         match crate::app::api::Api::start_http_server(self, address).await {
             Ok(result) => Ok(result),
-            Err(_) => Err(ErrorObjectOwned::from(ErrorCode::InternalError))
+            Err(_) => Err(ErrorObjectOwned::from(ErrorCode::InternalError)),
         }
     }
-    
+
     async fn stop_http_server(&self) -> RpcResult<()> {
         // Call the method from the API implementation
         match crate::app::api::Api::stop_http_server(self).await {
             Ok(_) => Ok(()),
-            Err(_) => Err(ErrorObjectOwned::from(ErrorCode::InternalError))
+            Err(_) => Err(ErrorObjectOwned::from(ErrorCode::InternalError)),
         }
     }
 }
@@ -370,7 +369,7 @@ impl ZinitLoggingApiServer for Api {
     ) -> SubscriptionResult {
         let sink = sink.accept().await?;
         let filter = name.map(|n| format!("{n}:"));
-        let mut stream = 
+        let mut stream =
             tokio_stream::wrappers::ReceiverStream::new(self.zinit.logs(false, true).await)
                 .filter_map(|l| {
                     if let Some(ref filter) = filter {
@@ -383,10 +382,7 @@ impl ZinitLoggingApiServer for Api {
                         Some(l.to_string())
                     }
                 });
-        while let Some(log) = stream
-                .next()
-                .await
-        {
+        while let Some(log) = stream.next().await {
             if sink.send(log.into()).await.is_err() {
                 break;
             }

@@ -1,8 +1,7 @@
 #[tokio::main]
-async fn main () {
+async fn main() {
     println!("hello from testapp");
 }
-
 
 // extern crate zinit;
 

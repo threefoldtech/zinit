@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_http::cors::{AllowHeaders, AllowMethods};
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::cors::{AllowMethods, AllowHeaders};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -83,7 +83,8 @@ impl Api {
         let middleware = tower::ServiceBuilder::new().layer(cors);
 
         // Create the JSON-RPC server with CORS support
-        let server_rpc = jsonrpsee::server::ServerBuilder::default().set_http_middleware(middleware)
+        let server_rpc = jsonrpsee::server::ServerBuilder::default()
+            .set_http_middleware(middleware)
             .build(socket_addr)
             .await?;
 

@@ -112,7 +112,11 @@ impl Client {
     }
 
     /// Send a JSON-RPC request and return the result
-    async fn jsonrpc_request(&self, method: &str, params: Option<Value>) -> Result<Value, ClientError> {
+    async fn jsonrpc_request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, ClientError> {
         // Get a unique ID for this request
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
@@ -124,7 +128,9 @@ impl Client {
         };
 
         match &self.transport {
-            Transport::UnixSocket(socket_path) => self.unix_socket_request(&request, socket_path).await,
+            Transport::UnixSocket(socket_path) => {
+                self.unix_socket_request(&request, socket_path).await
+            }
             Transport::Http(url) => self.http_request(&request, url).await,
         }
     }
@@ -173,8 +179,8 @@ impl Client {
         }
 
         // Convert to string and trim the trailing newline
-        let data = String::from_utf8(buffer)
-            .map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
+        let data =
+            String::from_utf8(buffer).map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
         let data = data.trim_end();
 
         // Parse the JSON-RPC response
@@ -315,7 +321,8 @@ impl Client {
             "name": name.as_ref()
         });
 
-        self.jsonrpc_request("service.monitor", Some(params)).await?;
+        self.jsonrpc_request("service.monitor", Some(params))
+            .await?;
         Ok(())
     }
 
