@@ -10,7 +10,7 @@ jobs:
   build:
     name: Releasing zinit
     # we use 18.04 to be compatible with libc version on zos
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
