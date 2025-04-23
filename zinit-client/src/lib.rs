@@ -2,8 +2,6 @@
 //!
 //! This library provides a simple API for communicating with a Zinit daemon
 //! via either Unix socket (using reth-ipc) or HTTP (using jsonrpsee).
-
-use async_trait::async_trait;
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::core::client::Error as RpcError;
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
@@ -19,25 +17,25 @@ use thiserror::Error;
 pub enum ClientError {
     #[error("connection error: {0}")]
     ConnectionError(String),
-    
+
     #[error("service not found: {0}")]
     ServiceNotFound(String),
-    
+
     #[error("service is already up: {0}")]
     ServiceIsUp(String),
-    
+
     #[error("system is shutting down")]
     ShuttingDown,
-    
+
     #[error("service already exists: {0}")]
     ServiceAlreadyExists(String),
-    
+
     #[error("service file error: {0}")]
     ServiceFileError(String),
-    
+
     #[error("rpc error: {0}")]
     RpcError(String),
-    
+
     #[error("unknown error: {0}")]
     UnknownError(String),
 }
@@ -55,7 +53,7 @@ impl From<RpcError> for ClientError {
                 _ => {}
             }
         }
-        
+
         match err {
             RpcError::Transport(_) => ClientError::ConnectionError(err.to_string()),
             _ => ClientError::RpcError(err.to_string()),
@@ -75,7 +73,7 @@ pub struct Status {
 
 /// Client implementation for communicating with Zinit
 pub enum Client {
-    Ipc(String),  // Socket path
+    Ipc(String), // Socket path
     Http(HttpClient),
 }
 
@@ -84,108 +82,106 @@ impl Client {
     pub async fn unix_socket<P: AsRef<std::path::Path>>(path: P) -> Result<Self, ClientError> {
         Ok(Client::Ipc(path.as_ref().to_string_lossy().to_string()))
     }
-    
+
     /// Create a new client using HTTP transport
     pub async fn http<S: AsRef<str>>(url: S) -> Result<Self, ClientError> {
         let client = HttpClientBuilder::default()
             .build(url.as_ref())
             .map_err(|e| ClientError::ConnectionError(e.to_string()))?;
-            
+
         Ok(Client::Http(client))
     }
-    
+
     // Helper to get IPC client
     async fn get_ipc_client(&self) -> Result<impl ClientT, ClientError> {
         match self {
-            Client::Ipc(path) => {
-                IpcClientBuilder::default()
-                    .build(path)
-                    .await
-                    .map_err(|e| ClientError::ConnectionError(e.to_string()))
-            },
+            Client::Ipc(path) => IpcClientBuilder::default()
+                .build(path)
+                .await
+                .map_err(|e| ClientError::ConnectionError(e.to_string())),
             _ => Err(ClientError::UnknownError("Not an IPC client".to_string())),
         }
     }
-    
+
     // Service API Methods
-    
+
     /// List all monitored services and their current state
     pub async fn list(&self) -> Result<HashMap<String, String>, ClientError> {
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.list", rpc_params![])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.list", rpc_params![])
+                client
+                    .request("service.list", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.list", rpc_params![])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Get the detailed status of a specific service
     pub async fn status(&self, name: impl AsRef<str>) -> Result<Status, ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.status", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.status", rpc_params![name])
+                client
+                    .request("service.status", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.status", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Start a specific service
     pub async fn start(&self, name: impl AsRef<str>) -> Result<(), ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.start", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.start", rpc_params![name])
+                client
+                    .request("service.start", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.start", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Stop a specific service
     pub async fn stop(&self, name: impl AsRef<str>) -> Result<(), ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.stop", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.stop", rpc_params![name])
+                client
+                    .request("service.stop", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.stop", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Restart a service
     pub async fn restart(&self, name: impl AsRef<str>) -> Result<(), ClientError> {
         let name = name.as_ref().to_string();
         // First stop the service
         self.stop(&name).await?;
-        
+
         // Poll the service status until it's stopped
         for _ in 0..20 {
             let status = self.status(&name).await?;
@@ -194,67 +190,71 @@ impl Client {
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        
+
         // Process not stopped, try to kill it
         self.kill(&name, "SIGKILL").await?;
         self.start(&name).await
     }
-    
+
     /// Load and monitor a new service from its configuration file
     pub async fn monitor(&self, name: impl AsRef<str>) -> Result<(), ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.monitor", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.monitor", rpc_params![name])
+                client
+                    .request("service.monitor", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.monitor", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Stop monitoring a service and remove it from management
     pub async fn forget(&self, name: impl AsRef<str>) -> Result<(), ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.forget", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.forget", rpc_params![name])
+                client
+                    .request("service.forget", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.forget", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Send a signal to a specific service process
-    pub async fn kill(&self, name: impl AsRef<str>, signal: impl AsRef<str>) -> Result<(), ClientError> {
+    pub async fn kill(
+        &self,
+        name: impl AsRef<str>,
+        signal: impl AsRef<str>,
+    ) -> Result<(), ClientError> {
         let name = name.as_ref().to_string();
         let signal = signal.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.kill", rpc_params![name, signal])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.kill", rpc_params![name, signal])
+                client
+                    .request("service.kill", rpc_params![name, signal])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.kill", rpc_params![name, signal])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Create a new service configuration
     pub async fn create_service(
         &self,
@@ -265,150 +265,150 @@ impl Client {
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.create", rpc_params![name, content])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.create", rpc_params![name, content])
+                client
+                    .request("service.create", rpc_params![name, content])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.create", rpc_params![name, content])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Delete a service configuration
     pub async fn delete_service(&self, name: impl AsRef<str>) -> Result<String, ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.delete", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.delete", rpc_params![name])
+                client
+                    .request("service.delete", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.delete", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Get a service configuration
     pub async fn get_service(&self, name: impl AsRef<str>) -> Result<Value, ClientError> {
         let name = name.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("service.get", rpc_params![name])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("service.get", rpc_params![name])
+                client
+                    .request("service.get", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("service.get", rpc_params![name])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     // System API Methods
-    
+
     /// Initiate system shutdown
     pub async fn shutdown(&self) -> Result<(), ClientError> {
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("system.shutdown", rpc_params![])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("system.shutdown", rpc_params![])
+                client
+                    .request("system.shutdown", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("system.shutdown", rpc_params![])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Initiate system reboot
     pub async fn reboot(&self) -> Result<(), ClientError> {
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("system.reboot", rpc_params![])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("system.reboot", rpc_params![])
+                client
+                    .request("system.reboot", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("system.reboot", rpc_params![])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Start HTTP/RPC server
     pub async fn start_http_server(&self, address: impl AsRef<str>) -> Result<String, ClientError> {
         let address = address.as_ref().to_string();
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("system.start_http_server", rpc_params![address])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("system.start_http_server", rpc_params![address])
+                client
+                    .request("system.start_http_server", rpc_params![address])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("system.start_http_server", rpc_params![address])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Stop HTTP/RPC server
     pub async fn stop_http_server(&self) -> Result<(), ClientError> {
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("system.stop_http_server", rpc_params![])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("system.stop_http_server", rpc_params![])
+                client
+                    .request("system.stop_http_server", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("system.stop_http_server", rpc_params![])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     // Logging API Methods
-    
+
     /// Get current logs
     pub async fn logs(&self, filter: Option<String>) -> Result<Vec<String>, ClientError> {
         match self {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
-                client.request("stream.currentLogs", rpc_params![filter])
-                    .await
-                    .map_err(Into::into)
-            },
-            Client::Http(client) => {
-                client.request("stream.currentLogs", rpc_params![filter])
+                client
+                    .request("stream.currentLogs", rpc_params![filter])
                     .await
                     .map_err(Into::into)
             }
+            Client::Http(client) => client
+                .request("stream.currentLogs", rpc_params![filter])
+                .await
+                .map_err(Into::into),
         }
     }
-    
+
     /// Subscribe to logs
-    /// 
+    ///
     /// Note: This method is not fully implemented yet. For now, it will return an error.
-    /// In a full implementation, this would return a subscription that can be used to
-    /// receive logs in real-time.
-    pub async fn log_subscribe(&self, filter: Option<String>) -> Result<(), ClientError> {
-        Err(ClientError::UnknownError("Log subscription not implemented yet".to_string()))
+    pub async fn log_subscribe(&self, _filter: Option<String>) -> Result<(), ClientError> {
+        Err(ClientError::UnknownError(
+            "Log subscription not implemented yet".to_string(),
+        ))
     }
 }
