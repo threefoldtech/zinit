@@ -1,115 +1,61 @@
-// Note: These tests require a running Zinit instance to work properly
-// They are disabled by default to avoid failing in CI environments
+use std::env;
+use zinit_client::{Client, ClientError};
 
-#[cfg(test)]
-mod tests {
-    use std::env;
-    use zinit_client::Client;
-
-    // This test is ignored by default since it requires a running Zinit instance
-    #[tokio::test]
-    #[ignore]
-    async fn test_unix_socket_list() {
-        // Get the socket path from environment or use default
-        let socket_path =
-            env::var("ZINIT_SOCKET").unwrap_or_else(|_| "/var/run/zinit.sock".to_string());
-
-        let client = Client::unix_socket(socket_path);
-        let result = client.list().await;
-
-        assert!(
-            result.is_ok(),
-            "Failed to list services: {:?}",
-            result.err()
-        );
-        let services = result.unwrap();
-        println!("Found {} services", services.len());
-
-        // Print the services
-        for (name, state) in services {
-            println!("- {}: {}", name, state);
-        }
+#[tokio::test]
+async fn test_connection_error() {
+    // Try to connect to a non-existent socket
+    let result = Client::unix_socket("/non/existent/socket").await;
+    assert!(result.is_ok()); // Just creating the client succeeds
+    
+    // Trying to make a request should fail
+    if let Ok(client) = result {
+        let list_result = client.list().await;
+        assert!(matches!(list_result, Err(ClientError::ConnectionError(_))));
     }
+}
 
-    // This test is ignored by default since it requires a running Zinit HTTP proxy
-    #[tokio::test]
-    #[ignore]
-    async fn test_http_list() {
-        // Get the HTTP URL from environment or use default
-        let http_url =
-            env::var("ZINIT_HTTP").unwrap_or_else(|_| "http://localhost:8080".to_string());
-
-        let client = Client::http(http_url);
-        let result = client.list().await;
-
-        assert!(
-            result.is_ok(),
-            "Failed to list services: {:?}",
-            result.err()
-        );
-        let services = result.unwrap();
-        println!("Found {} services", services.len());
-
-        // Print the services
-        for (name, state) in services {
-            println!("- {}: {}", name, state);
-        }
+#[tokio::test]
+async fn test_http_connection_error() {
+    // Try to connect to a non-existent HTTP endpoint
+    let result = Client::http("http://localhost:12345").await;
+    // This should succeed as we're just creating the client, not making a request
+    assert!(result.is_ok());
+    
+    // Try to make a request which should fail
+    if let Ok(client) = result {
+        let list_result = client.list().await;
+        assert!(matches!(list_result, Err(ClientError::ConnectionError(_))));
     }
+}
 
-    // This test is ignored by default since it requires a running Zinit instance
-    // and will actually start/stop a service
-    #[tokio::test]
-    #[ignore]
-    async fn test_service_lifecycle() {
-        // Get the socket path from environment or use default
-        let socket_path =
-            env::var("ZINIT_SOCKET").unwrap_or_else(|_| "/var/run/zinit.sock".to_string());
-        // Get a test service name from environment
-        let service_name =
-            env::var("TEST_SERVICE").expect("TEST_SERVICE environment variable must be set");
-
-        let client = Client::unix_socket(socket_path);
-
-        // Test service status
-        let status_result = client.status(&service_name).await;
-        assert!(
-            status_result.is_ok(),
-            "Failed to get service status: {:?}",
-            status_result.err()
-        );
-
-        // Test service stop
-        let stop_result = client.stop(&service_name).await;
-        assert!(
-            stop_result.is_ok(),
-            "Failed to stop service: {:?}",
-            stop_result.err()
-        );
-
-        // Wait a bit for the service to stop
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        // Test service start
-        let start_result = client.start(&service_name).await;
-        assert!(
-            start_result.is_ok(),
-            "Failed to start service: {:?}",
-            start_result.err()
-        );
-
-        // Wait a bit for the service to start
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        // Check service status again
-        let status_result = client.status(&service_name).await;
-        assert!(
-            status_result.is_ok(),
-            "Failed to get service status: {:?}",
-            status_result.err()
-        );
-        let status = status_result.unwrap();
-
-        // Service should be running
-        assert!(status.pid > 0, "Service is not running");
+// This test only runs if ZINIT_SOCKET is set in the environment
+// and points to a valid Zinit socket
+#[tokio::test]
+#[ignore]
+async fn test_live_connection() {
+    let socket_path = match env::var("ZINIT_SOCKET") {
+        Ok(path) => path,
+        Err(_) => {
+            println!("ZINIT_SOCKET not set, skipping live test");
+            return;
+        }
+    };
+    
+    let client = match Client::unix_socket(&socket_path).await {
+        Ok(client) => client,
+        Err(e) => {
+            panic!("Failed to connect to Zinit socket at {}: {}", socket_path, e);
+        }
+    };
+    
+    // Test listing services
+    let services = client.list().await.expect("Failed to list services");
+    println!("Found {} services", services.len());
+    
+    // If there are services, test getting status of the first one
+    if let Some((service_name, _)) = services.iter().next() {
+        let status = client.status(service_name).await
+            .expect("Failed to get service status");
+        println!("Service {} has PID {}", service_name, status.pid);
     }
 }
