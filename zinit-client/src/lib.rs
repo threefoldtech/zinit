@@ -111,12 +111,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.list", rpc_params![])
+                    .request("service_list", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.list", rpc_params![])
+                .request("service_list", rpc_params![])
                 .await
                 .map_err(Into::into),
         }
@@ -129,12 +129,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.status", rpc_params![name])
+                    .request("service_status", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.status", rpc_params![name])
+                .request("service_status", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -147,12 +147,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.start", rpc_params![name])
+                    .request("service_start", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.start", rpc_params![name])
+                .request("service_start", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -165,12 +165,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.stop", rpc_params![name])
+                    .request("service_stop", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.stop", rpc_params![name])
+                .request("service_stop", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -203,12 +203,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.monitor", rpc_params![name])
+                    .request("service_monitor", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.monitor", rpc_params![name])
+                .request("service_monitor", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -221,12 +221,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.forget", rpc_params![name])
+                    .request("service_forget", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.forget", rpc_params![name])
+                .request("service_forget", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -244,12 +244,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.kill", rpc_params![name, signal])
+                    .request("service_kill", rpc_params![name, signal])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.kill", rpc_params![name, signal])
+                .request("service_kill", rpc_params![name, signal])
                 .await
                 .map_err(Into::into),
         }
@@ -266,12 +266,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.create", rpc_params![name, content])
+                    .request("service_create", rpc_params![name, content])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.create", rpc_params![name, content])
+                .request("service_create", rpc_params![name, content])
                 .await
                 .map_err(Into::into),
         }
@@ -284,12 +284,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.delete", rpc_params![name])
+                    .request("service_delete", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.delete", rpc_params![name])
+                .request("service_delete", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -302,12 +302,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("service.get", rpc_params![name])
+                    .request("service_get", rpc_params![name])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("service.get", rpc_params![name])
+                .request("service_get", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
@@ -321,12 +321,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("system.shutdown", rpc_params![])
+                    .request("system_shutdown", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("system.shutdown", rpc_params![])
+                .request("system_shutdown", rpc_params![])
                 .await
                 .map_err(Into::into),
         }
@@ -338,12 +338,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("system.reboot", rpc_params![])
+                    .request("system_reboot", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("system.reboot", rpc_params![])
+                .request("system_reboot", rpc_params![])
                 .await
                 .map_err(Into::into),
         }
@@ -356,12 +356,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("system.start_http_server", rpc_params![address])
+                    .request("system_start_http_server", rpc_params![address])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("system.start_http_server", rpc_params![address])
+                .request("system_start_http_server", rpc_params![address])
                 .await
                 .map_err(Into::into),
         }
@@ -373,12 +373,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("system.stop_http_server", rpc_params![])
+                    .request("system_stop_http_server", rpc_params![])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("system.stop_http_server", rpc_params![])
+                .request("system_stop_http_server", rpc_params![])
                 .await
                 .map_err(Into::into),
         }
@@ -392,12 +392,12 @@ impl Client {
             Client::Ipc(_) => {
                 let client = self.get_ipc_client().await?;
                 client
-                    .request("stream.currentLogs", rpc_params![filter])
+                    .request("stream_currentLogs", rpc_params![filter])
                     .await
                     .map_err(Into::into)
             }
             Client::Http(client) => client
-                .request("stream.currentLogs", rpc_params![filter])
+                .request("stream_currentLogs", rpc_params![filter])
                 .await
                 .map_err(Into::into),
         }
