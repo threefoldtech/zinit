@@ -47,10 +47,7 @@ type Handler = oneshot::Sender<WaitStatus>;
 
 impl Process {
     pub fn new<S: Into<String>>(cmd: S, cwd: S, env: Option<HashMap<String, String>>) -> Process {
-        let env = match env {
-            None => HashMap::new(),
-            Some(env) => env,
-        };
+        let env = env.unwrap_or_default();
 
         Process {
             env,
@@ -141,8 +138,8 @@ impl ProcessManager {
         });
     }
 
-    pub async fn stream(&self, follow: bool) -> Logs {
-        self.ring.stream(follow).await
+    pub async fn stream(&self, existing_logs: bool, follow: bool) -> Logs {
+        self.ring.stream(existing_logs, follow).await
     }
 
     pub fn signal(&self, pid: Pid, sig: signal::Signal) -> Result<()> {

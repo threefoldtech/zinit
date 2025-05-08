@@ -1,25 +1,28 @@
-use crate::zinit::{config, ZInit};
-use anyhow::{Context, Result};
-use nix::sys::signal;
+use super::rpc::{
+    ZinitLoggingApiServer, ZinitRpcApiServer, ZinitServiceApiServer, ZinitSystemApiServer,
+};
+use crate::zinit::ZInit;
+use anyhow::{bail, Context, Result};
+use jsonrpsee::server::ServerHandle;
+use reth_ipc::server::Builder;
 use serde::{Deserialize, Serialize};
-use serde_json::{self as encoder, Value};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::marker::Unpin;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
-use tokio::net::{UnixListener, UnixStream};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tower_http::cors::{AllowHeaders, AllowMethods};
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-struct Response {
-    pub state: State,
+struct ZinitResponse {
+    pub state: ZinitState,
     pub body: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum State {
+enum ZinitState {
     Ok,
     Error,
 }
@@ -34,329 +37,83 @@ pub struct Status {
     pub after: HashMap<String, String>,
 }
 
+pub struct ApiServer {
+    _handle: ServerHandle,
+}
+
+#[derive(Clone)]
 pub struct Api {
-    zinit: ZInit,
-    socket: PathBuf,
+    pub zinit: ZInit,
+    pub http_server_handle: Arc<Mutex<Option<jsonrpsee::server::ServerHandle>>>,
 }
 
 impl Api {
-    pub fn new<P: AsRef<Path>>(zinit: ZInit, socket: P) -> Api {
+    pub fn new(zinit: ZInit) -> Api {
         Api {
             zinit,
-            socket: socket.as_ref().to_path_buf(),
+            http_server_handle: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub async fn serve(&self) -> Result<()> {
-        let listener = UnixListener::bind(&self.socket).context("failed to listen for socket")?;
-        loop {
-            if let Ok((stream, _addr)) = listener.accept().await {
-                tokio::spawn(Self::handle(stream, self.zinit.clone()));
-            }
-        }
+    pub async fn serve(&self, endpoint: String) -> Result<ApiServer> {
+        let server = Builder::default().build(endpoint);
+        let mut module = ZinitRpcApiServer::into_rpc(self.clone());
+        module.merge(ZinitSystemApiServer::into_rpc(self.clone()))?;
+        module.merge(ZinitServiceApiServer::into_rpc(self.clone()))?;
+        module.merge(ZinitLoggingApiServer::into_rpc(self.clone()))?;
+
+        let _handle = server.start(module).await?;
+
+        Ok(ApiServer { _handle })
     }
 
-    async fn handle(stream: UnixStream, zinit: ZInit) {
-        let mut stream = BufStream::new(stream);
-        let mut cmd = String::new();
-        if let Err(err) = stream.read_line(&mut cmd).await {
-            error!("failed to read command: {}", err);
-            let _ = stream.write_all("bad request".as_ref()).await;
-        };
+    /// Start an HTTP/RPC server at a specified address
+    pub async fn start_http_server(&self, address: String) -> Result<String> {
+        // Parse the address string
+        let socket_addr = address
+            .parse::<std::net::SocketAddr>()
+            .context("Failed to parse socket address")?;
 
-        let response = match Self::process(cmd, &mut stream, zinit).await {
-            // When process returns None means we can terminate without
-            // writing any result to the socket.
-            Ok(None) => return,
-            Ok(Some(body)) => Response {
-                body,
-                state: State::Ok,
-            },
-            Err(err) => Response {
-                state: State::Error,
-                body: encoder::to_value(format!("{}", err)).unwrap(),
-            },
-        };
+        let cors = CorsLayer::new()
+            // Allow `POST` when accessing the resource
+            .allow_methods(AllowMethods::any())
+            // Allow requests from any origin
+            .allow_origin(Any)
+            .allow_headers(AllowHeaders::any());
+        let middleware = tower::ServiceBuilder::new().layer(cors);
 
-        let value = match encoder::to_vec(&response) {
-            Ok(value) => value,
-            Err(err) => {
-                debug!("failed to create response: {}", err);
-                return;
-            }
-        };
-
-        if let Err(err) = stream.write_all(&value).await {
-            error!("failed to send response to client: {}", err);
-        };
-
-        let _ = stream.flush().await;
-    }
-
-    async fn process(
-        cmd: String,
-        stream: &mut BufStream<UnixStream>,
-        zinit: ZInit,
-    ) -> Result<Option<Value>> {
-        let parts = match shlex::split(&cmd) {
-            Some(parts) => parts,
-            None => bail!("invalid command syntax"),
-        };
-
-        if parts.is_empty() {
-            bail!("unknown command");
-        }
-
-        if &parts[0] == "log" {
-            match parts.len() {
-                1 => Self::log(stream, zinit, true).await,
-                2 if parts[1] == "snapshot" => Self::log(stream, zinit, false).await,
-                _ => bail!("invalid log command arguments"),
-            }?;
-
-            return Ok(None);
-        }
-
-        let value = match parts[0].as_ref() {
-            "list" => Self::list(zinit).await,
-            "shutdown" => Self::shutdown(zinit).await,
-            "reboot" => Self::reboot(zinit).await,
-            "start" if parts.len() == 2 => Self::start(&parts[1], zinit).await,
-            "stop" if parts.len() == 2 => Self::stop(&parts[1], zinit).await,
-            "kill" if parts.len() == 3 => Self::kill(&parts[1], &parts[2], zinit).await,
-            "status" if parts.len() == 2 => Self::status(&parts[1], zinit).await,
-            "forget" if parts.len() == 2 => Self::forget(&parts[1], zinit).await,
-            "monitor" if parts.len() == 2 => Self::monitor(&parts[1], zinit).await,
-            _ => bail!("unknown command '{}' or wrong arguments count", parts[0]),
-        }?;
-
-        Ok(Some(value))
-    }
-
-    async fn log(stream: &mut BufStream<UnixStream>, zinit: ZInit, follow: bool) -> Result<Value> {
-        let mut logs = zinit.logs(follow).await;
-
-        while let Some(line) = logs.recv().await {
-            stream.write_all(line.as_bytes()).await?;
-            stream.write_all(b"\n").await?;
-            stream.flush().await?;
-        }
-
-        Ok(Value::Null)
-    }
-
-    async fn list(zinit: ZInit) -> Result<Value> {
-        let services = zinit.list().await?;
-        let mut map: HashMap<String, String> = HashMap::new();
-        for service in services {
-            let state = zinit.status(&service).await?;
-            map.insert(service, format!("{:?}", state.state));
-        }
-
-        Ok(encoder::to_value(map)?)
-    }
-
-    async fn monitor<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        let (name, service) = config::load(format!("{}.yaml", name.as_ref()))
-            .context("failed to load service config")?;
-        zinit.monitor(name, service).await?;
-        Ok(Value::Null)
-    }
-
-    async fn forget<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        zinit.forget(name).await?;
-        Ok(Value::Null)
-    }
-
-    async fn stop<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        zinit.stop(name).await?;
-        Ok(Value::Null)
-    }
-
-    async fn shutdown(zinit: ZInit) -> Result<Value> {
-        tokio::spawn(async move {
-            if let Err(err) = zinit.shutdown().await {
-                error!("failed to execute shutdown: {}", err);
-            }
-        });
-
-        Ok(Value::Null)
-    }
-
-    async fn reboot(zinit: ZInit) -> Result<Value> {
-        tokio::spawn(async move {
-            if let Err(err) = zinit.reboot().await {
-                error!("failed to execute reboot: {}", err);
-            }
-        });
-
-        Ok(Value::Null)
-    }
-
-    async fn start<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        zinit.start(name).await?;
-        Ok(Value::Null)
-    }
-
-    async fn kill<S: AsRef<str>>(name: S, sig: S, zinit: ZInit) -> Result<Value> {
-        let sig = sig.as_ref();
-        let sig = signal::Signal::from_str(&sig.to_uppercase())?;
-        zinit.kill(name, sig).await?;
-        Ok(Value::Null)
-    }
-
-    async fn status<S: AsRef<str>>(name: S, zinit: ZInit) -> Result<Value> {
-        let status = zinit.status(&name).await?;
-
-        let result = Status {
-            name: name.as_ref().into(),
-            pid: status.pid.as_raw() as u32,
-            state: format!("{:?}", status.state),
-            target: format!("{:?}", status.target),
-            after: {
-                let mut after = HashMap::new();
-                for service in status.service.after {
-                    let status = match zinit.status(&service).await {
-                        Ok(dep) => dep.state,
-                        Err(_) => crate::zinit::State::Unknown,
-                    };
-                    after.insert(service, format!("{:?}", status));
-                }
-                after
-            },
-        };
-
-        Ok(encoder::to_value(result)?)
-    }
-}
-
-pub struct Client {
-    socket: PathBuf,
-}
-
-impl Client {
-    pub fn new<P: AsRef<Path>>(socket: P) -> Client {
-        Client {
-            socket: socket.as_ref().to_path_buf(),
-        }
-    }
-
-    async fn connect(&self) -> Result<UnixStream> {
-        UnixStream::connect(&self.socket).await.with_context(|| {
-            format!(
-                "failed to connect to '{:?}'. is zinit listening on that socket?",
-                self.socket
-            )
-        })
-    }
-
-    async fn command(&self, c: &str) -> Result<Value> {
-        let mut con = BufStream::new(self.connect().await?);
-
-        let _ = con.write(c.as_bytes()).await?;
-        let _ = con.write(b"\n").await?;
-        con.flush().await?;
-
-        let mut data = String::new();
-        con.read_to_string(&mut data).await?;
-
-        let response: Response = encoder::from_str(&data)?;
-
-        match response.state {
-            State::Ok => Ok(response.body),
-            State::Error => {
-                let err: String = encoder::from_value(response.body)?;
-                bail!(err)
-            }
-        }
-    }
-
-    pub async fn logs<O: tokio::io::AsyncWrite + Unpin, S: AsRef<str>>(
-        &self,
-        mut out: O,
-        filter: Option<S>,
-        follow: bool,
-    ) -> Result<()> {
-        let mut con = self.connect().await?;
-        if follow {
-            // default behavior of log with no extra arguments
-            // is to stream all logs
-            con.write_all(b"log\n").await?;
-        } else {
-            // adding a snapshot subcmd will make it auto terminate
-            // immediate after
-            con.write_all(b"log snapshot\n").await?;
-        }
-        con.flush().await?;
-        match filter {
-            None => tokio::io::copy(&mut con, &mut out).await?,
-            Some(filter) => {
-                let filter = format!("{}:", filter.as_ref());
-                let mut stream = BufStream::new(con);
-                loop {
-                    let mut line = String::new();
-                    match stream.read_line(&mut line).await {
-                        Ok(0) => break,
-                        Ok(_) => {}
-                        Err(err) => {
-                            bail!("failed to read stream: {}", err);
-                        }
-                    }
-
-                    if line[4..].starts_with(&filter) {
-                        let _ = out.write_all(line.as_bytes()).await;
-                    }
-                }
-                0
-            }
-        };
-
-        Ok(())
-    }
-
-    pub async fn list(&self) -> Result<HashMap<String, String>> {
-        let response = self.command("list").await?;
-        Ok(encoder::from_value(response)?)
-    }
-
-    pub async fn shutdown(&self) -> Result<()> {
-        self.command("shutdown").await?;
-        Ok(())
-    }
-
-    pub async fn reboot(&self) -> Result<()> {
-        self.command("reboot").await?;
-        Ok(())
-    }
-
-    pub async fn status<S: AsRef<str>>(&self, name: S) -> Result<Status> {
-        let response = self.command(&format!("status {}", name.as_ref())).await?;
-        Ok(encoder::from_value(response)?)
-    }
-
-    pub async fn start<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("start {}", name.as_ref())).await?;
-        Ok(())
-    }
-
-    pub async fn stop<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("stop {}", name.as_ref())).await?;
-        Ok(())
-    }
-
-    pub async fn forget<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("forget {}", name.as_ref())).await?;
-        Ok(())
-    }
-
-    pub async fn monitor<S: AsRef<str>>(&self, name: S) -> Result<()> {
-        self.command(&format!("monitor {}", name.as_ref())).await?;
-        Ok(())
-    }
-
-    pub async fn kill<S: AsRef<str>>(&self, name: S, sig: S) -> Result<()> {
-        self.command(&format!("kill {} {}", name.as_ref(), sig.as_ref()))
+        // Create the JSON-RPC server with CORS support
+        let server_rpc = jsonrpsee::server::ServerBuilder::default()
+            .set_http_middleware(middleware)
+            .build(socket_addr)
             .await?;
-        Ok(())
+
+        // Create and merge all API modules
+        let mut rpc_module = ZinitRpcApiServer::into_rpc(self.clone());
+        rpc_module.merge(ZinitSystemApiServer::into_rpc(self.clone()))?;
+        rpc_module.merge(ZinitServiceApiServer::into_rpc(self.clone()))?;
+        rpc_module.merge(ZinitLoggingApiServer::into_rpc(self.clone()))?;
+
+        // Start the server
+        let handle = server_rpc.start(rpc_module);
+
+        // Store the handle
+        let mut http_handle = self.http_server_handle.lock().await;
+        *http_handle = Some(handle);
+
+        Ok(format!("HTTP/RPC server started at {}", address))
+    }
+
+    /// Stop the HTTP/RPC server if running
+    pub async fn stop_http_server(&self) -> Result<()> {
+        let mut http_handle = self.http_server_handle.lock().await;
+
+        if http_handle.is_some() {
+            // The handle is automatically dropped, which should stop the server
+            *http_handle = None;
+            Ok(())
+        } else {
+            bail!("No HTTP/RPC server is currently running")
+        }
     }
 }

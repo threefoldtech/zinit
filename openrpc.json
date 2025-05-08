@@ -1,0 +1,774 @@
+{
+  "openrpc": "1.2.6",
+  "info": {
+    "version": "1.0.0",
+    "title": "Zinit JSON-RPC API",
+    "description": "JSON-RPC 2.0 API for controlling and querying Zinit services",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "name": "Unix Socket",
+      "url": "unix:///var/run/zinit.sock"
+    }
+  ],
+  "methods": [
+    {
+      "name": "rpc_discover",
+      "description": "Returns the OpenRPC specification for the API",
+      "params": [],
+      "result": {
+        "name": "OpenRPCSpec",
+        "description": "The OpenRPC specification",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "examples": [
+        {
+          "name": "Get API specification",
+          "params": [],
+          "result": {
+            "name": "OpenRPCSpecResult",
+            "value": {
+              "openrpc": "1.2.6",
+              "info": {
+                "version": "1.0.0",
+                "title": "Zinit JSON-RPC API"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "service_list",
+      "description": "Lists all services managed by Zinit",
+      "params": [],
+      "result": {
+        "name": "ServiceList",
+        "description": "A map of service names to their current states",
+        "schema": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Service state (Running, Success, Error, etc.)"
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "List all services",
+          "params": [],
+          "result": {
+            "name": "ServiceListResult",
+            "value": {
+              "service1": "Running",
+              "service2": "Success",
+              "service3": "Error"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "service_status",
+      "description": "Shows detailed status information for a specific service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ServiceStatus",
+        "description": "Detailed status information for the service",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Service name"
+            },
+            "pid": {
+              "type": "integer",
+              "description": "Process ID of the running service (if running)"
+            },
+            "state": {
+              "type": "string",
+              "description": "Current state of the service (Running, Success, Error, etc.)"
+            },
+            "target": {
+              "type": "string",
+              "description": "Target state of the service (Up, Down)"
+            },
+            "after": {
+              "type": "object",
+              "description": "Dependencies of the service and their states",
+              "additionalProperties": {
+                "type": "string",
+                "description": "State of the dependency"
+              }
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "Get status of redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "ServiceStatusResult",
+            "value": {
+              "name": "redis",
+              "pid": 1234,
+              "state": "Running",
+              "target": "Up",
+              "after": {
+                "dependency1": "Success",
+                "dependency2": "Running"
+              }
+            }
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        }
+      ]
+    },
+    {
+      "name": "service_start",
+      "description": "Starts a service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to start",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StartResult",
+        "description": "Result of the start operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Start redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "StartResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        }
+      ]
+    },
+    {
+      "name": "service_stop",
+      "description": "Stops a service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to stop",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StopResult",
+        "description": "Result of the stop operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Stop redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "StopResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32003,
+          "message": "Service is down",
+          "data": "service \"redis\" is down"
+        }
+      ]
+    },
+    {
+      "name": "service_monitor",
+      "description": "Starts monitoring a service. The service configuration is loaded from the config directory.",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to monitor",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "MonitorResult",
+        "description": "Result of the monitor operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Monitor redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "MonitorResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32001,
+          "message": "Service already monitored",
+          "data": "service \"redis\" already monitored"
+        },
+        {
+          "code": -32005,
+          "message": "Config error",
+          "data": "failed to load service configuration"
+        }
+      ]
+    },
+    {
+      "name": "service_forget",
+      "description": "Stops monitoring a service. You can only forget a stopped service.",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to forget",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ForgetResult",
+        "description": "Result of the forget operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Forget redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "ForgetResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32002,
+          "message": "Service is up",
+          "data": "service \"redis\" is up"
+        }
+      ]
+    },
+    {
+      "name": "service_kill",
+      "description": "Sends a signal to a running service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to send the signal to",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "signal",
+          "description": "The signal to send (e.g., SIGTERM, SIGKILL)",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KillResult",
+        "description": "Result of the kill operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Send SIGTERM to redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            },
+            {
+              "name": "signal",
+              "value": "SIGTERM"
+            }
+          ],
+          "result": {
+            "name": "KillResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32003,
+          "message": "Service is down",
+          "data": "service \"redis\" is down"
+        },
+        {
+          "code": -32004,
+          "message": "Invalid signal",
+          "data": "invalid signal: INVALID"
+        }
+      ]
+    },
+    {
+      "name": "system_shutdown",
+      "description": "Stops all services and powers off the system",
+      "params": [],
+      "result": {
+        "name": "ShutdownResult",
+        "description": "Result of the shutdown operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Shutdown the system",
+          "params": [],
+          "result": {
+            "name": "ShutdownResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32006,
+          "message": "Shutting down",
+          "data": "system is already shutting down"
+        }
+      ]
+    },
+    {
+      "name": "system_reboot",
+      "description": "Stops all services and reboots the system",
+      "params": [],
+      "result": {
+        "name": "RebootResult",
+        "description": "Result of the reboot operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Reboot the system",
+          "params": [],
+          "result": {
+            "name": "RebootResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32006,
+          "message": "Shutting down",
+          "data": "system is already shutting down"
+        }
+      ]
+    },
+    {
+      "name": "service_create",
+      "description": "Creates a new service configuration file",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to create",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "content",
+          "description": "The service configuration content",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "exec": {
+                "type": "string",
+                "description": "Command to run"
+              },
+              "oneshot": {
+                "type": "boolean",
+                "description": "Whether the service should be restarted"
+              },
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Services that must be running before this one starts"
+              },
+              "log": {
+                "type": "string",
+                "enum": ["null", "ring", "stdout"],
+                "description": "How to handle service output"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables for the service"
+              },
+              "shutdown_timeout": {
+                "type": "integer",
+                "description": "Maximum time to wait for service to stop during shutdown"
+              }
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "CreateServiceResult",
+        "description": "Result of the create operation",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "errors": [
+        {
+          "code": -32007,
+          "message": "Service already exists",
+          "data": "Service 'name' already exists"
+        },
+        {
+          "code": -32008,
+          "message": "Service file error",
+          "data": "Failed to create service file"
+        }
+      ]
+    },
+    {
+      "name": "service_delete",
+      "description": "Deletes a service configuration file",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to delete",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "DeleteServiceResult",
+        "description": "Result of the delete operation",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "Service 'name' not found"
+        },
+        {
+          "code": -32008,
+          "message": "Service file error",
+          "data": "Failed to delete service file"
+        }
+      ]
+    },
+    {
+      "name": "service_get",
+      "description": "Gets a service configuration file",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to get",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "GetServiceResult",
+        "description": "The service configuration",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "Service 'name' not found"
+        },
+        {
+          "code": -32008,
+          "message": "Service file error",
+          "data": "Failed to read service file"
+        }
+      ]
+    },
+    {
+      "name": "system_start_http_server",
+      "description": "Start an HTTP/RPC server at the specified address",
+      "params": [
+        {
+          "name": "address",
+          "description": "The network address to bind the server to (e.g., '127.0.0.1:8080')",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StartHttpServerResult",
+        "description": "Result of the start HTTP server operation",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "examples": [
+        {
+          "name": "Start HTTP server on localhost:8080",
+          "params": [
+            {
+              "name": "address",
+              "value": "127.0.0.1:8080"
+            }
+          ],
+          "result": {
+            "name": "StartHttpServerResult",
+            "value": "HTTP server started at 127.0.0.1:8080"
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Invalid address",
+          "data": "Invalid network address format"
+        }
+      ]
+    },
+    {
+      "name": "system_stop_http_server",
+      "description": "Stop the HTTP/RPC server if running",
+      "params": [],
+      "result": {
+        "name": "StopHttpServerResult",
+        "description": "Result of the stop HTTP server operation",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "examples": [
+        {
+          "name": "Stop the HTTP server",
+          "params": [],
+          "result": {
+            "name": "StopHttpServerResult",
+            "value": null
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32602,
+          "message": "Server not running",
+          "data": "No HTTP server is currently running"
+        }
+      ]
+    },
+    {
+      "name": "stream_currentLogs",
+      "description": "Get current logs from zinit and monitored services",
+      "params": [
+        {
+          "name": "name",
+          "description": "Optional service name filter. If provided, only logs from this service will be returned",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "LogsResult",
+        "description": "Array of log strings",
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "Get all logs",
+          "params": [],
+          "result": {
+            "name": "LogsResult",
+            "value": [
+              "2023-01-01T12:00:00 redis: Starting service",
+              "2023-01-01T12:00:01 nginx: Starting service"
+            ]
+          }
+        },
+        {
+          "name": "Get logs for a specific service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "LogsResult",
+            "value": [
+              "2023-01-01T12:00:00 redis: Starting service",
+              "2023-01-01T12:00:02 redis: Service started"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "stream_subscribeLogs",
+      "description": "Subscribe to log messages generated by zinit and monitored services",
+      "params": [
+        {
+          "name": "name",
+          "description": "Optional service name filter. If provided, only logs from this service will be returned",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "LogSubscription",
+        "description": "A subscription to log messages",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "examples": [
+        {
+          "name": "Subscribe to all logs",
+          "params": [],
+          "result": {
+            "name": "LogSubscription",
+            "value": "2023-01-01T12:00:00 redis: Service started"
+          }
+        },
+        {
+          "name": "Subscribe to filtered logs",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "LogSubscription",
+            "value": "2023-01-01T12:00:00 redis: Service started"
+          }
+        }
+      ]
+    }
+  ]
+}

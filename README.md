@@ -1,10 +1,6 @@
 # Zinit [![Rust](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml/badge.svg)](https://github.com/threefoldtech/zinit/actions/workflows/rust.yml)
 
-A lightweight PID 1 replacement inspired by runit, written in Rust using Tokio for async I/O.
-
-## Overview
-
-Zinit is a service manager designed to be simple, lightweight, and reliable for both system services and container environments. It acts as an init system (PID 1) but focuses only on essential service management functionality.
+Zinit is a lightweight PID 1 replacement inspired by runit, written in Rust using Tokio for async I/O. It provides both a Unix socket interface and an HTTP API for interacting with the process manager.
 
 ### Key Features
 
@@ -14,57 +10,60 @@ Zinit is a service manager designed to be simple, lightweight, and reliable for 
 - **Container Support**: Can run in container mode with appropriate signal handling
 - **Configurable Logging**: Multiple logging options including ringbuffer and stdout
 
-## Documentation
+## Installation
 
-Comprehensive documentation is available in the [docs](docs) directory:
+Click [here](docs/installation.md) for more information on how to install Zinit.
 
-- [Command Line Interface](docs/readme.md)
-- [Implementation Details](docs/implementation.md)
-- [API Protocol](docs/protocol.md)
+## Usage
 
-## Quick Start
-
-### Installation
+### Process Manager (zinit)
 
 ```bash
-# Build from source
-make
+# Run zinit in init mode
+zinit init --config /etc/zinit/ --socket /var/run/zinit.sock
 
-# Install the binary
-sudo cp target/x86_64-unknown-linux-musl/release/zinit /usr/local/bin/
+# List services
+zinit list
+
+# Start a service
+zinit start <service-name>
+
+# Stop a service
+zinit stop <service-name>
 ```
-
-### Testing with Docker
-
-To quickly try zinit in a container environment:
 
 ```bash
-# Build the test docker image
-make docker
-
-# Run the container
-docker run -dt --device=/dev/kmsg:/dev/kmsg:rw zinit
+# Start the HTTP proxy on the default port (8080)
+zinit proxy
 ```
 
-The test image automatically starts Redis and OpenSSH services.
+More information about all the available commands can be found [here](docs/cmd.md).
 
-## Building from Source
+### Service Configuration
 
-### Requirements
+Zinit uses YAML files for service configuration. Here's a basic example:
 
-- Rust (cargo) - version 1.46.0 or later
-- musl and musl-tools packages
-- GNU Make
+```yaml
+# Service configuration (e.g., /etc/zinit/myservice.yaml)
+exec: "/usr/bin/myservice --option value"   # Command to run (required)
+test: "/usr/bin/check-myservice"            # Health check command (optional)
+oneshot: false                              # Whether to restart on exit (default: false)
+after:                                      # Services that must be running first (optional)
+  - dependency1
+  - dependency2
+```
 
-### Build Instructions
+For more information on how to configure service files, see the [service file reference](docs/services.md) documentation.
+
+### JSON-RPC API
+
+The HTTP proxy provides a JSON-RPC 2.0 API for interacting with Zinit. You can send JSON-RPC requests to the HTTP endpoint you provided to the proxy:
 
 ```bash
-# Standard build
-make
-
-# For development/debug
-make dev
+curl -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"service_list","params":{}}' http://localhost:8080/
 ```
+
+See the [OpenRPC specs](openrpc.json) for more information about available RPC calls to interact with Zinit.
 
 ## License
 

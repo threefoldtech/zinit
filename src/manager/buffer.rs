@@ -102,16 +102,23 @@ impl Ring {
     /// then if follow is true the logs stream will remain
     /// open and fed each received line forever until the
     /// received closed the channel from its end.
-    pub async fn stream(&self, follow: bool) -> Logs {
+    pub async fn stream(&self, existing_logs: bool, follow: bool) -> Logs {
         let (tx, stream) = mpsc::channel::<Arc<String>>(100);
         let mut rx = self.sender.subscribe();
-        let buffer = self
-            .buffer
-            .lock()
-            .await
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
+
+        let buffer = if existing_logs {
+            // Get current exisiting logs
+            self.buffer
+                .lock()
+                .await
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            // Don't care about existing logs
+            vec![]
+        };
+
         tokio::spawn(async move {
             for item in buffer {
                 let _ = tx.send(Arc::clone(&item)).await;
