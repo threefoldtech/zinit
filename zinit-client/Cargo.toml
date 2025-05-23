@@ -9,7 +9,7 @@ authors = ["ThreeFold Tech, https://github.com/threefoldtech"]
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1.88"
-jsonrpsee = { version = "0.24.9", features = ["server", "client", "macros"] }
+jsonrpsee = { version = "0.25.1", features = ["macros", "http-client", "ws-client"] }
 reth-ipc = { git = "https://github.com/paradigmxyz/reth", package = "reth-ipc" }
 tokio = { version = "1.14.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
