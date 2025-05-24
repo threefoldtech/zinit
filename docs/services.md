@@ -9,6 +9,7 @@ Zinit uses YAML files for service configuration. Each service has its own config
 ### File Naming and Location
 
 - **Location**: `/etc/zinit/` (default, can be changed with `-c` flag)
+  - on osx `~/hero/cfg/zinit`
 - **Naming**: `<service-name>.yaml`
 
 For example:
