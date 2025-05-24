@@ -9,11 +9,15 @@ if [ ! -f "Cargo.toml" ]; then
     exit 1
 fi
 
-# Function to get the latest release tag from GitHub
-get_latest_release() {
-    local latest_tag=$(curl -s "https://api.github.com/repos/threefoldtech/zinit/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+# Function to get the latest tag from Git
+get_latest_tag() {
+    # Fetch all tags from remote
+    git fetch --tags origin 2>/dev/null
     
-    if [ "$latest_tag" = "null" ] || [ -z "$latest_tag" ]; then
+    # Get the latest tag using version sorting
+    local latest_tag=$(git tag -l "v*" | sort -V | tail -n 1)
+    
+    if [ -z "$latest_tag" ]; then
         echo "v0.0.0"
     else
         echo "$latest_tag"
@@ -38,11 +42,11 @@ increment_version() {
     echo "v${major}.${minor}.${patch}"
 }
 
-echo "🔍 Checking latest release..."
-latest_release=$(get_latest_release)
-echo "Latest release: $latest_release"
+echo "🔍 Checking latest tag..."
+latest_tag=$(get_latest_tag)
+echo "Latest tag: $latest_tag"
 
-new_version=$(increment_version "$latest_release")
+new_version=$(increment_version "$latest_tag")
 echo "New version: $new_version"
 
 # Confirm with user

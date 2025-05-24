@@ -8,29 +8,60 @@ name: Create Release
 
 jobs:
   build:
-    name: Releasing zinit
-    runs-on: ubuntu-latest
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary_name: zinit-linux-x86_64
+          # macOS builds
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: zinit-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: zinit-macos-aarch64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Setup build environment (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Install required build tools for macOS
+          brew install llvm
+      
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          target: x86_64-unknown-linux-musl
+          target: ${{ matrix.target }}
           override: true
+      
       - name: Build release
+        env:
+          CC: ${{ matrix.os == 'macos-latest' && 'clang' || '' }}
+          CXX: ${{ matrix.os == 'macos-latest' && 'clang++' || '' }}
         run: |
-          cargo build --release --target=x86_64-unknown-linux-musl
+          cargo build --release --target=${{ matrix.target }}
+      
       - name: Strip binary
         run: |
-          strip target/x86_64-unknown-linux-musl/release/zinit
-      - name: Create Release
+          strip target/${{ matrix.target }}/release/zinit
+      
+      - name: Rename binary
+        run: |
+          cp target/${{ matrix.target }}/release/zinit ${{ matrix.binary_name }}
+      
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          files: target/x86_64-unknown-linux-musl/release/zinit
+          files: ${{ matrix.binary_name }}
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
