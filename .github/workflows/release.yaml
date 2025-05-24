@@ -9,41 +9,30 @@ name: Create Release
 jobs:
   build:
     name: Releasing zinit
-    # we use 18.04 to be compatible with libc version on zos
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        name: Install toolchain
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: x86_64-unknown-linux-musl
-      - uses: actions-rs/cargo@v1
-        name: Build release
-        with:
-          command: build
-          args: --release --target=x86_64-unknown-linux-musl
-      - name: Strip
+          override: true
+      - name: Build release
+        run: |
+          cargo build --release --target=x86_64-unknown-linux-musl
+      - name: Strip binary
         run: |
           strip target/x86_64-unknown-linux-musl/release/zinit
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          files: target/x86_64-unknown-linux-musl/release/zinit
+          name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
-      - name: Upload Release Asset
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/x86_64-unknown-linux-musl/release/zinit
-          asset_name: zinit
-          asset_content_type: application/x-pie-executable

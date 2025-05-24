@@ -6,27 +6,11 @@ on:
 name: Create OSX Release
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: macos-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }} - OSX
-          draft: false
-          prerelease: false
-
   build:
     name: Build and Upload OSX Binaries
     runs-on: macos-latest
-    needs: create-release
+    permissions:
+      contents: write
     strategy:
       matrix:
         target:
@@ -46,22 +30,20 @@ jobs:
           target: ${{ matrix.target }}
           override: true
       - name: Build release
-        uses: actions-rs/cargo@v1
         env:
           CC: clang
           CXX: clang++
-        with:
-          command: build
-          args: --release --target=${{ matrix.target }}
+        run: |
+          cargo build --release --target=${{ matrix.target }}
       - name: Strip binary
         run: |
           strip target/${{ matrix.target }}/release/zinit
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/${{ matrix.target }}/release/zinit
+          name: Release ${{ github.ref_name }} - OSX
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/${{ matrix.target }}/release/zinit
-          asset_name: zinit-${{ matrix.target }}
-          asset_content_type: application/octet-stream
