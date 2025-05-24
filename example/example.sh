@@ -13,7 +13,9 @@ else
 fi
 
 SERVICE_NAME="test_service"
+CPU_SERVICE_NAME="cpu_test_service"
 SERVICE_FILE="$ZINIT_CONFIG_DIR/$SERVICE_NAME.yaml"
+CPU_SERVICE_FILE="$ZINIT_CONFIG_DIR/$CPU_SERVICE_NAME.yaml"
 
 echo "--- Zinit Example Script ---"
 echo "Zinit binary path: $ZINIT_BIN"
@@ -47,7 +49,7 @@ else
     echo "Zinit daemon successfully started."
 fi
 
-# Step 3: Create a sample zinit service file
+# Step 3: Create sample zinit service files
 echo "Creating sample service file: $SERVICE_FILE"
 cat <<EOF > "$SERVICE_FILE"
 name: $SERVICE_NAME
@@ -61,19 +63,42 @@ if [ $? -ne 0 ]; then
 fi
 echo "Service file created."
 
-# Step 4: Tell zinit to monitor the new service
-echo "Telling zinit to monitor the service..."
+# Create a CPU-intensive service with child processes
+echo "Creating CPU-intensive service file: $CPU_SERVICE_FILE"
+cat <<EOF > "$CPU_SERVICE_FILE"
+name: $CPU_SERVICE_NAME
+exec: /bin/bash -c "for i in {1..3}; do (openssl speed -multi 2 &) ; done; while true; do sleep 10; done"
+log: stdout
+EOF
+
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to create CPU service file $CPU_SERVICE_FILE. Exiting."
+    exit 1
+fi
+echo "CPU service file created."
+
+# Step 4: Tell zinit to monitor the new services
+echo "Telling zinit to monitor the services..."
 "$ZINIT_BIN" monitor "$SERVICE_NAME"
+"$ZINIT_BIN" monitor "$CPU_SERVICE_NAME"
 
 # Step 5: List services to verify the new service is recognized
 echo "Listing zinit services to verify..."
 "$ZINIT_BIN" list
 
-# # Step 6: Clean up (optional, but good for examples)
-# echo "Cleaning up: stopping and forgetting $SERVICE_NAME..."
+# Step 6: Show stats for the CPU-intensive service
+echo "Waiting for services to start and generate some stats..."
+sleep 5
+echo "Getting stats for $CPU_SERVICE_NAME..."
+"$ZINIT_BIN" stats "$CPU_SERVICE_NAME"
+
+# # Step 7: Clean up (optional, but good for examples)
+# echo "Cleaning up: stopping and forgetting services..."
 # "$ZINIT_BIN" stop "$SERVICE_NAME" > /dev/null 2>&1
 # "$ZINIT_BIN" forget "$SERVICE_NAME" > /dev/null 2>&1
-# rm -f "$SERVICE_FILE"
+# "$ZINIT_BIN" stop "$CPU_SERVICE_NAME" > /dev/null 2>&1
+# "$ZINIT_BIN" forget "$CPU_SERVICE_NAME" > /dev/null 2>&1
+# rm -f "$SERVICE_FILE" "$CPU_SERVICE_FILE"
 # echo "Cleanup complete."
 
 echo "--- Script Finished ---"
