@@ -11,7 +11,7 @@
   "servers": [
     {
       "name": "Unix Socket",
-      "url": "unix:///tmp/zinit.sock"
+      "url": "unix:///var/run/zinit.sock"
     }
   ],
   "methods": [
