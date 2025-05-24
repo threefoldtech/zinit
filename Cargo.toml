@@ -46,3 +46,4 @@ path = "src/lib.rs"
 [[bin]]
 name = "zinit"
 path = "src/main.rs"
+
