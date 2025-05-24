@@ -116,7 +116,7 @@ jobs:
       
       # Upload artifacts even if the release step fails
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: ${{ matrix.binary_name }}
           path: ${{ matrix.binary_name }}
