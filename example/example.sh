@@ -67,7 +67,7 @@ echo "Service file created."
 echo "Creating CPU-intensive service file: $CPU_SERVICE_FILE"
 cat <<EOF > "$CPU_SERVICE_FILE"
 name: $CPU_SERVICE_NAME
-exec: /bin/bash -c "for i in {1..3}; do (openssl speed -multi 2 &) ; done; while true; do sleep 10; done"
+exec: /bin/bash -c "for i in {1..3}; do (yes > /dev/null &) ; done; while true; do sleep 10; done"
 log: stdout
 EOF
 

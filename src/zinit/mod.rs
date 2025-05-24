@@ -9,7 +9,7 @@ pub mod types;
 // Re-export commonly used items
 pub use service::ZInitStatus;
 pub use state::State;
-pub use types::{ServiceStats, ProcessStats};
+pub use types::{ProcessStats, ServiceStats};
 
 use crate::manager::{Logs, ProcessManager};
 use anyhow::Result;

@@ -1,4 +1,4 @@
-use crate::app::api::{Status, Stats, ChildStats};
+use crate::app::api::{ChildStats, Stats, Status};
 use crate::zinit::config;
 use async_trait::async_trait;
 use jsonrpsee::core::{RpcResult, SubscriptionResult};
@@ -290,11 +290,15 @@ impl ZinitServiceApiServer for Api {
             pid: stats.pid as u32,
             memory_usage: stats.memory_usage,
             cpu_usage: stats.cpu_usage,
-            children: stats.children.into_iter().map(|child| ChildStats {
-                pid: child.pid as u32,
-                memory_usage: child.memory_usage,
-                cpu_usage: child.cpu_usage,
-            }).collect(),
+            children: stats
+                .children
+                .into_iter()
+                .map(|child| ChildStats {
+                    pid: child.pid as u32,
+                    memory_usage: child.memory_usage,
+                    cpu_usage: child.cpu_usage,
+                })
+                .collect(),
         };
 
         Ok(result)

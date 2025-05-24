@@ -5,9 +5,11 @@ use crate::zinit::errors::ZInitError;
 use crate::zinit::ord::{service_dependency_order, ProcessDAG, DUMMY_ROOT};
 use crate::zinit::service::ZInitService;
 use crate::zinit::state::{State, Target};
-use crate::zinit::types::{ServiceStats, ProcessStats, ServiceTable};
+use crate::zinit::types::{ProcessStats, ServiceStats, ServiceTable};
 #[cfg(target_os = "linux")]
 use crate::zinit::types::Watcher;
+use sysinfo::{self, PidExt, ProcessExt, System, SystemExt};
+use std::collections::HashMap;
 
 // Define a local extension trait for WaitStatus
 trait WaitStatusExt {
@@ -25,16 +27,14 @@ use nix::sys::reboot::RebootMode;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
-#[cfg(target_os = "linux")]
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use tokio::sync::mpsc;
 use tokio::sync::{Notify, RwLock};
-use tokio::time;
 #[cfg(target_os = "linux")]
 use tokio::time::timeout;
+use tokio::time::sleep;
 #[cfg(target_os = "linux")]
 use tokio_stream::StreamExt;
 
@@ -243,180 +243,83 @@ impl LifecycleManager {
 
     /// Get memory and CPU usage for a process
     async fn get_process_stats(&self, pid: i32) -> Result<(u64, f32)> {
-        #[cfg(target_os = "linux")]
-        {
-            use std::fs;
-            use std::io::Read;
-            use std::path::Path;
-            use std::time::{Duration, Instant};
-
-            // Read memory usage from /proc/{pid}/status
-            let mut memory_usage = 0;
-            let status_path = format!("/proc/{}/status", pid);
-            if Path::new(&status_path).exists() {
-                let mut status_content = String::new();
-                let mut file = fs::File::open(status_path)?;
-                file.read_to_string(&mut status_content)?;
-                
-                // Parse VmRSS line for memory usage in kB
-                for line in status_content.lines() {
-                    if line.starts_with("VmRSS:") {
-                        let parts: Vec<&str> = line.split_whitespace().collect();
-                        if parts.len() >= 2 {
-                            if let Ok(kb) = parts[1].parse::<u64>() {
-                                memory_usage = kb * 1024; // Convert kB to bytes
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Read CPU usage by sampling /proc/{pid}/stat
-            let mut cpu_usage = 0.0;
-            let stat_path = format!("/proc/{}/stat", pid);
-            if Path::new(&stat_path).exists() {
-                // First sample
-                let (utime1, stime1, start_time) = self.read_proc_stat(pid)?;
-                let total_time1 = utime1 + stime1;
-                
-                // Wait a short time
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                
-                // Second sample
-                let (utime2, stime2, _) = self.read_proc_stat(pid)?;
-                let total_time2 = utime2 + stime2;
-                
-                // Calculate CPU usage
-                let system_uptime = self.get_system_uptime()?;
-                let process_uptime = system_uptime - (start_time / self.get_clock_ticks()?);
-                
-                if process_uptime > 0.0 {
-                    let time_delta = (total_time2 - total_time1) as f32;
-                    cpu_usage = 100.0 * (time_delta / self.get_clock_ticks()? as f32) / 0.1;
-                }
-            }
-
+        // Create a new System instance
+        let mut system = System::new();
+        
+        // Convert i32 pid to sysinfo::Pid
+        let sys_pid = sysinfo::Pid::from(pid as usize);
+        
+        // First refresh to get initial CPU values
+        system.refresh_process(sys_pid);
+        
+        // Wait a short time for CPU measurement
+        sleep(std::time::Duration::from_millis(100)).await;
+        
+        // Refresh again to get updated CPU values
+        system.refresh_process(sys_pid);
+        
+        // Get the process
+        if let Some(process) = system.process(sys_pid) {
+            // Get memory in bytes
+            let memory_usage = process.memory();
+            
+            // Get CPU usage as percentage
+            let cpu_usage = process.cpu_usage();
+            
             Ok((memory_usage, cpu_usage))
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            // For non-Linux systems, return placeholder values
-            // In a real implementation, you would use platform-specific APIs
+        } else {
+            // Process not found
             Ok((0, 0.0))
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn read_proc_stat(&self, pid: i32) -> Result<(u64, u64, u64)> {
-        use std::fs;
-        use std::io::Read;
-        
-        let stat_path = format!("/proc/{}/stat", pid);
-        let mut stat_content = String::new();
-        let mut file = fs::File::open(stat_path)?;
-        file.read_to_string(&mut stat_content)?;
-        
-        let parts: Vec<&str> = stat_content.split_whitespace().collect();
-        if parts.len() < 22 {
-            return Err(anyhow::anyhow!("Invalid /proc/{}/stat format", pid));
-        }
-        
-        let utime = parts[13].parse::<u64>()?;
-        let stime = parts[14].parse::<u64>()?;
-        let start_time = parts[21].parse::<u64>()?;
-        
-        Ok((utime, stime, start_time))
-    }
-
-    #[cfg(target_os = "linux")]
-    fn get_system_uptime(&self) -> Result<f64> {
-        use std::fs;
-        use std::io::Read;
-        
-        let mut uptime_content = String::new();
-        let mut file = fs::File::open("/proc/uptime")?;
-        file.read_to_string(&mut uptime_content)?;
-        
-        let parts: Vec<&str> = uptime_content.split_whitespace().collect();
-        if parts.is_empty() {
-            return Err(anyhow::anyhow!("Invalid /proc/uptime format"));
-        }
-        
-        let uptime = parts[0].parse::<f64>()?;
-        Ok(uptime)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn get_clock_ticks(&self) -> Result<u64> {
-        // sysconf(_SC_CLK_TCK) is typically 100 on Linux
-        Ok(100)
-    }
-
     /// Get stats for child processes
     async fn get_child_process_stats(&self, parent_pid: i32) -> Result<Vec<ProcessStats>> {
-        #[cfg(target_os = "linux")]
-        {
-            use std::fs;
-            use std::path::Path;
-            
-            let mut children = Vec::new();
-            
-            // Find all processes in /proc
-            if let Ok(entries) = fs::read_dir("/proc") {
-                for entry in entries.filter_map(Result::ok) {
-                    let path = entry.path();
-                    
-                    // Check if this is a PID directory
-                    if let Some(file_name) = path.file_name() {
-                        if let Some(file_name_str) = file_name.to_str() {
-                            if let Ok(pid) = file_name_str.parse::<i32>() {
-                                // Skip the parent process
-                                if pid == parent_pid {
-                                    continue;
-                                }
-                                
-                                // Check if this is a child of the parent
-                                let status_path = format!("/proc/{}/status", pid);
-                                if Path::new(&status_path).exists() {
-                                    let status_content = fs::read_to_string(status_path).ok();
-                                    if let Some(content) = status_content {
-                                        for line in content.lines() {
-                                            if line.starts_with("PPid:") {
-                                                let parts: Vec<&str> = line.split_whitespace().collect();
-                                                if parts.len() >= 2 {
-                                                    if let Ok(ppid) = parts[1].parse::<i32>() {
-                                                        if ppid == parent_pid {
-                                                            // This is a child process
-                                                            if let Ok((memory_usage, cpu_usage)) = self.get_process_stats(pid).await {
-                                                                children.push(ProcessStats {
-                                                                    pid,
-                                                                    memory_usage,
-                                                                    cpu_usage,
-                                                                });
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        // Create a new System instance with all processes information
+        let mut system = System::new_all();
+        system.refresh_all();
+        
+        // Convert i32 pid to sysinfo::Pid
+        let sys_pid = sysinfo::Pid::from(parent_pid as usize);
+        
+        // Wait a short time for CPU measurement
+        sleep(std::time::Duration::from_millis(100)).await;
+        
+        // Refresh processes to get updated CPU values
+        system.refresh_processes();
+        
+        let mut children = Vec::new();
+        
+        // Recursively collect all descendant PIDs
+        let mut descendant_pids = Vec::new();
+        self.collect_descendants(sys_pid, &system.processes(), &mut descendant_pids);
+        
+        // Get stats for each child process
+        for &child_pid in &descendant_pids {
+            if let Some(process) = system.process(child_pid) {
+                children.push(ProcessStats {
+                    pid: child_pid.as_u32() as i32,
+                    memory_usage: process.memory(),
+                    cpu_usage: process.cpu_usage(),
+                });
             }
-            
-            Ok(children)
         }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            // For non-Linux systems, return an empty vector
-            Ok(Vec::new())
+        
+        Ok(children)
+    }
+    
+    /// Recursively collect all descendant PIDs of a process
+    fn collect_descendants(
+        &self,
+        pid: sysinfo::Pid,
+        procs: &HashMap<sysinfo::Pid, sysinfo::Process>,
+        out: &mut Vec<sysinfo::Pid>,
+    ) {
+        for (&child_pid, proc) in procs.iter() {
+            if proc.parent() == Some(pid) {
+                out.push(child_pid);
+                self.collect_descendants(child_pid, procs, out);
+            }
         }
     }
 
@@ -678,7 +581,7 @@ impl LifecycleManager {
                         return;
                     }
                     // wait before we try again
-                    time::sleep(std::time::Duration::from_secs(2)).await;
+                    sleep(std::time::Duration::from_secs(2)).await;
                 }
                 Err(_) => {
                     self.set_service_state(&name, Some(State::TestFailure), None)
@@ -830,7 +733,7 @@ impl LifecycleManager {
             }
 
             // we trying again in 2 seconds
-            time::sleep(std::time::Duration::from_secs(2)).await;
+            sleep(std::time::Duration::from_secs(2)).await;
         }
 
         let mut service = input.write().await;
