@@ -13,6 +13,7 @@ jobs:
     permissions:
       contents: write
     strategy:
+      fail-fast: false  # Continue with other builds if one fails
       matrix:
         include:
           # Linux builds
@@ -29,12 +30,31 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper versioning
+      
+      # Cache Rust dependencies
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
       
       - name: Setup build environment (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           # Install required build tools for macOS
           brew install llvm
+          
+          # For cross-compilation to Apple Silicon when on Intel
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            rustup target add aarch64-apple-darwin
+          fi
       
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
@@ -42,22 +62,66 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
           override: true
+          profile: minimal  # Minimal components for faster installation
+      
+      - name: Install MUSL tools (Linux)
+        if: matrix.os == 'ubuntu-latest' && contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
       
       - name: Build release
         env:
           CC: ${{ matrix.os == 'macos-latest' && 'clang' || '' }}
           CXX: ${{ matrix.os == 'macos-latest' && 'clang++' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: '10.12'
         run: |
-          cargo build --release --target=${{ matrix.target }}
+          # Add special flags for Apple Silicon builds
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            export RUSTFLAGS="-C target-feature=+crt-static"
+          fi
+          
+          cargo build --release --target=${{ matrix.target }} --verbose
+          
+          # Verify binary exists
+          if [ ! -f "target/${{ matrix.target }}/release/zinit" ]; then
+            echo "::error::Binary not found at target/${{ matrix.target }}/release/zinit"
+            exit 1
+          fi
       
-      - name: Strip binary
+      - name: Strip binary (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           strip target/${{ matrix.target }}/release/zinit
+
+      - name: Strip binary (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          strip -x target/${{ matrix.target }}/release/zinit || true
       
       - name: Rename binary
         run: |
           cp target/${{ matrix.target }}/release/zinit ${{ matrix.binary_name }}
+          
+          # Verify binary was copied successfully
+          if [ ! -f "${{ matrix.binary_name }}" ]; then
+            echo "::error::Binary not copied successfully to ${{ matrix.binary_name }}"
+            exit 1
+          fi
+          
+          # Show binary info for debugging
+          echo "Binary details for ${{ matrix.binary_name }}:"
+          ls -la ${{ matrix.binary_name }}
+          file ${{ matrix.binary_name }} || true
       
+      # Upload artifacts even if the release step fails
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.binary_name }}
+          path: ${{ matrix.binary_name }}
+          retention-days: 5
+          
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
@@ -65,5 +129,6 @@ jobs:
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
