@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
         )
         .get_matches();
 
-use dirs; // Add this import
+    use dirs; // Add this import
 
     let socket = matches.value_of("socket").unwrap();
     let debug = matches.is_present("debug");
@@ -177,8 +177,15 @@ use dirs; // Add this import
     } else {
         #[cfg(target_os = "macos")]
         {
-            let home_dir = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-            home_dir.join("hero").join("cfg").join("zinit").to_str().ok_or_else(|| anyhow::anyhow!("Invalid path for config directory"))?.to_string()
+            let home_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+            home_dir
+                .join("hero")
+                .join("cfg")
+                .join("zinit")
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("Invalid path for config directory"))?
+                .to_string()
         }
         #[cfg(not(target_os = "macos"))]
         {

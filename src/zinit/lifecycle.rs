@@ -5,11 +5,11 @@ use crate::zinit::errors::ZInitError;
 use crate::zinit::ord::{service_dependency_order, ProcessDAG, DUMMY_ROOT};
 use crate::zinit::service::ZInitService;
 use crate::zinit::state::{State, Target};
-use crate::zinit::types::{ProcessStats, ServiceStats, ServiceTable};
 #[cfg(target_os = "linux")]
 use crate::zinit::types::Watcher;
-use sysinfo::{self, PidExt, ProcessExt, System, SystemExt};
+use crate::zinit::types::{ProcessStats, ServiceStats, ServiceTable};
 use std::collections::HashMap;
+use sysinfo::{self, PidExt, ProcessExt, System, SystemExt};
 
 // Define a local extension trait for WaitStatus
 trait WaitStatusExt {
@@ -32,9 +32,9 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use tokio::sync::mpsc;
 use tokio::sync::{Notify, RwLock};
+use tokio::time::sleep;
 #[cfg(target_os = "linux")]
 use tokio::time::timeout;
-use tokio::time::sleep;
 #[cfg(target_os = "linux")]
 use tokio_stream::StreamExt;
 
@@ -245,27 +245,27 @@ impl LifecycleManager {
     async fn get_process_stats(&self, pid: i32) -> Result<(u64, f32)> {
         // Create a new System instance
         let mut system = System::new();
-        
+
         // Convert i32 pid to sysinfo::Pid
         let sys_pid = sysinfo::Pid::from(pid as usize);
-        
+
         // First refresh to get initial CPU values
         system.refresh_process(sys_pid);
-        
+
         // Wait a short time for CPU measurement
         sleep(std::time::Duration::from_millis(100)).await;
-        
+
         // Refresh again to get updated CPU values
         system.refresh_process(sys_pid);
-        
+
         // Get the process
         if let Some(process) = system.process(sys_pid) {
             // Get memory in bytes
             let memory_usage = process.memory();
-            
+
             // Get CPU usage as percentage
             let cpu_usage = process.cpu_usage();
-            
+
             Ok((memory_usage, cpu_usage))
         } else {
             // Process not found
@@ -278,22 +278,22 @@ impl LifecycleManager {
         // Create a new System instance with all processes information
         let mut system = System::new_all();
         system.refresh_all();
-        
+
         // Convert i32 pid to sysinfo::Pid
         let sys_pid = sysinfo::Pid::from(parent_pid as usize);
-        
+
         // Wait a short time for CPU measurement
         sleep(std::time::Duration::from_millis(100)).await;
-        
+
         // Refresh processes to get updated CPU values
         system.refresh_processes();
-        
+
         let mut children = Vec::new();
-        
+
         // Recursively collect all descendant PIDs
         let mut descendant_pids = Vec::new();
         self.collect_descendants(sys_pid, &system.processes(), &mut descendant_pids);
-        
+
         // Get stats for each child process
         for &child_pid in &descendant_pids {
             if let Some(process) = system.process(child_pid) {
@@ -304,10 +304,10 @@ impl LifecycleManager {
                 });
             }
         }
-        
+
         Ok(children)
     }
-    
+
     /// Recursively collect all descendant PIDs of a process
     fn collect_descendants(
         &self,
@@ -328,7 +328,7 @@ impl LifecycleManager {
         info!("shutting down");
         #[cfg(target_os = "linux")]
         return self.power(RebootMode::RB_POWER_OFF).await;
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             *self.shutdown.write().await = true;
@@ -346,7 +346,7 @@ impl LifecycleManager {
         info!("rebooting");
         #[cfg(target_os = "linux")]
         return self.power(RebootMode::RB_AUTOBOOT).await;
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             *self.shutdown.write().await = true;
