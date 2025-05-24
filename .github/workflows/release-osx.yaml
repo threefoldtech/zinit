@@ -2,13 +2,6 @@ on:
   push:
     tags:
       - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Tag name for release'
-        required: true
-        default: 'v1.0.0'
-
 
 name: Create OSX Release
 
@@ -25,8 +18,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.event.inputs.tag_name || github.ref }}
-          release_name: Release ${{ github.event.inputs.tag_name || github.ref }} - OSX
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }} - OSX
           draft: false
           prerelease: false
 
@@ -42,6 +35,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Setup build environment
+        run: |
+          # Install required build tools for macOS
+          brew install llvm
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -50,6 +47,9 @@ jobs:
           override: true
       - name: Build release
         uses: actions-rs/cargo@v1
+        env:
+          CC: clang
+          CXX: clang++
         with:
           command: build
           args: --release --target=${{ matrix.target }}
