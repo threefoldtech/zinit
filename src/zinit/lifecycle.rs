@@ -666,7 +666,7 @@ impl LifecycleManager {
 
         // Verify the service is actually stopped
         if let Ok(status) = self.status(&name).await {
-            if status.pid != 0 {
+            if status.pid != Pid::from_raw(0) {
                 // Service is still running, try to kill it
                 let _ = self.kill(&name, signal::Signal::SIGKILL).await;
             }
