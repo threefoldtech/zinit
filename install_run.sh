@@ -8,10 +8,9 @@ YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}Starting zinit installation and setup...${NC}"
-
 # Download and execute install.sh
 echo -e "${YELLOW}Downloading and executing install.sh...${NC}"
-curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install.sh | bash
 
 # Determine the path to zinit based on OS
 if [ "$(uname -s)" = "Darwin" ]; then

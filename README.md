@@ -12,6 +12,13 @@ Zinit is a lightweight PID 1 replacement inspired by runit, written in Rust usin
 
 ## Installation
 
+```bash
+curl https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install.sh | bash
+
+#to install & run
+curl https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install_run.sh | bash
+```
+
 Click [here](docs/installation.md) for more information on how to install Zinit.
 
 ## Usage
