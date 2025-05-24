@@ -144,6 +144,16 @@ async fn main() -> Result<()> {
                 .about("restart a service."),
         )
         .subcommand(
+            SubCommand::with_name("stats")
+                .arg(
+                    Arg::with_name("service")
+                        .value_name("SERVICE")
+                        .required(true)
+                        .help("service name"),
+                )
+                .about("show memory and CPU usage statistics for a service"),
+        )
+        .subcommand(
             SubCommand::with_name("proxy")
                 .arg(
                     Arg::with_name("address")
@@ -244,6 +254,9 @@ use dirs; // Add this import
         }
         ("restart", Some(matches)) => {
             app::restart(socket, matches.value_of("service").unwrap().to_string()).await
+        }
+        ("stats", Some(matches)) => {
+            app::stats(socket, matches.value_of("service").unwrap().to_string()).await
         }
         ("proxy", Some(matches)) => {
             app::proxy(socket, matches.value_of("address").unwrap().to_string()).await

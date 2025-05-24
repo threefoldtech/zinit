@@ -37,6 +37,26 @@ pub struct Status {
     pub after: HashMap<String, String>,
 }
 
+/// Service stats information
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub struct Stats {
+    pub name: String,
+    pub pid: u32,
+    pub memory_usage: u64,
+    pub cpu_usage: f32,
+    pub children: Vec<ChildStats>,
+}
+
+/// Child process stats information
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub struct ChildStats {
+    pub pid: u32,
+    pub memory_usage: u64,
+    pub cpu_usage: f32,
+}
+
 pub struct ApiServer {
     _handle: ServerHandle,
 }

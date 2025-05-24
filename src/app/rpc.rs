@@ -1,4 +1,4 @@
-use crate::app::api::Status;
+use crate::app::api::{Status, Stats, ChildStats};
 use crate::zinit::config;
 use async_trait::async_trait;
 use jsonrpsee::core::{RpcResult, SubscriptionResult};
@@ -84,6 +84,10 @@ pub trait ZinitServiceApi {
     /// Get the content of a service configuration file as a JSON Value.
     #[method(name = "get")]
     async fn get(&self, name: String) -> RpcResult<Value>;
+
+    /// Get memory and CPU usage statistics for a service.
+    #[method(name = "stats")]
+    async fn stats(&self, name: String) -> RpcResult<Stats>;
 }
 
 #[async_trait]
@@ -272,6 +276,28 @@ impl ZinitServiceApiServer for Api {
             .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?;
 
         Ok(json_value)
+    }
+
+    async fn stats(&self, name: String) -> RpcResult<Stats> {
+        let stats = self
+            .zinit
+            .stats(&name)
+            .await
+            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?;
+
+        let result = Stats {
+            name: name.clone(),
+            pid: stats.pid as u32,
+            memory_usage: stats.memory_usage,
+            cpu_usage: stats.cpu_usage,
+            children: stats.children.into_iter().map(|child| ChildStats {
+                pid: child.pid as u32,
+                memory_usage: child.memory_usage,
+                cpu_usage: child.cpu_usage,
+            }).collect(),
+        };
+
+        Ok(result)
     }
 }
 

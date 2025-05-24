@@ -602,6 +602,105 @@
       ]
     },
     {
+      "name": "service_stats",
+      "description": "Get memory and CPU usage statistics for a service",
+      "params": [
+        {
+          "name": "name",
+          "description": "The name of the service to get stats for",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ServiceStats",
+        "description": "Memory and CPU usage statistics for the service",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Service name"
+            },
+            "pid": {
+              "type": "integer",
+              "description": "Process ID of the service"
+            },
+            "memory_usage": {
+              "type": "integer",
+              "description": "Memory usage in bytes"
+            },
+            "cpu_usage": {
+              "type": "number",
+              "description": "CPU usage as a percentage (0-100)"
+            },
+            "children": {
+              "type": "array",
+              "description": "Stats for child processes",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pid": {
+                    "type": "integer",
+                    "description": "Process ID of the child process"
+                  },
+                  "memory_usage": {
+                    "type": "integer",
+                    "description": "Memory usage in bytes"
+                  },
+                  "cpu_usage": {
+                    "type": "number",
+                    "description": "CPU usage as a percentage (0-100)"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "Get stats for redis service",
+          "params": [
+            {
+              "name": "name",
+              "value": "redis"
+            }
+          ],
+          "result": {
+            "name": "ServiceStatsResult",
+            "value": {
+              "name": "redis",
+              "pid": 1234,
+              "memory_usage": 10485760,
+              "cpu_usage": 2.5,
+              "children": [
+                {
+                  "pid": 1235,
+                  "memory_usage": 5242880,
+                  "cpu_usage": 1.2
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "errors": [
+        {
+          "code": -32000,
+          "message": "Service not found",
+          "data": "service name \"unknown\" unknown"
+        },
+        {
+          "code": -32003,
+          "message": "Service is down",
+          "data": "service \"redis\" is down"
+        }
+      ]
+    },
+    {
       "name": "system_start_http_server",
       "description": "Start an HTTP/RPC server at the specified address",
       "params": [

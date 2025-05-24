@@ -177,6 +177,13 @@ pub async fn kill(socket: &str, name: String, signal: String) -> Result<()> {
     Ok(())
 }
 
+pub async fn stats(socket: &str, name: String) -> Result<()> {
+    let client = IpcClientBuilder::default().build(socket.into()).await?;
+    let results = client.stats(name).await?;
+    encoder::to_writer(std::io::stdout(), &results)?;
+    Ok(())
+}
+
 pub async fn logs(
     socket: &str,
     filter: Option<String>,

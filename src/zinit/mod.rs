@@ -9,6 +9,7 @@ pub mod types;
 // Re-export commonly used items
 pub use service::ZInitStatus;
 pub use state::State;
+pub use types::{ServiceStats, ProcessStats};
 
 use crate::manager::{Logs, ProcessManager};
 use anyhow::Result;
@@ -109,5 +110,10 @@ impl ZInit {
     /// Reboot the system
     pub async fn reboot(&self) -> Result<()> {
         self.lifecycle.reboot().await
+    }
+
+    /// Get stats for a service (memory and CPU usage)
+    pub async fn stats<S: AsRef<str>>(&self, name: S) -> Result<ServiceStats> {
+        self.lifecycle.stats(name).await
     }
 }

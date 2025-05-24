@@ -69,11 +69,11 @@ echo "Telling zinit to monitor the service..."
 echo "Listing zinit services to verify..."
 "$ZINIT_BIN" list
 
-# Step 6: Clean up (optional, but good for examples)
-echo "Cleaning up: stopping and forgetting $SERVICE_NAME..."
-"$ZINIT_BIN" stop "$SERVICE_NAME" > /dev/null 2>&1
-"$ZINIT_BIN" forget "$SERVICE_NAME" > /dev/null 2>&1
-rm -f "$SERVICE_FILE"
-echo "Cleanup complete."
+# # Step 6: Clean up (optional, but good for examples)
+# echo "Cleaning up: stopping and forgetting $SERVICE_NAME..."
+# "$ZINIT_BIN" stop "$SERVICE_NAME" > /dev/null 2>&1
+# "$ZINIT_BIN" forget "$SERVICE_NAME" > /dev/null 2>&1
+# rm -f "$SERVICE_FILE"
+# echo "Cleanup complete."
 
 echo "--- Script Finished ---"

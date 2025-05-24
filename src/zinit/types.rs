@@ -4,6 +4,36 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::WatchStream;
+use serde::{Deserialize, Serialize};
+
+/// Stats information for a service
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceStats {
+    /// Memory usage in bytes
+    pub memory_usage: u64,
+    
+    /// CPU usage as a percentage (0-100)
+    pub cpu_usage: f32,
+    
+    /// Process ID of the service
+    pub pid: i32,
+    
+    /// Child process stats if any
+    pub children: Vec<ProcessStats>,
+}
+
+/// Stats for an individual process
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessStats {
+    /// Process ID
+    pub pid: i32,
+    
+    /// Memory usage in bytes
+    pub memory_usage: u64,
+    
+    /// CPU usage as a percentage (0-100)
+    pub cpu_usage: f32,
+}
 
 /// Extension trait for WaitStatus to check if a process exited successfully
 pub trait WaitStatusExt {

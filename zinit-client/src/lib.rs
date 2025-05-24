@@ -71,6 +71,24 @@ pub struct Status {
     pub after: HashMap<String, String>,
 }
 
+/// Child process stats information
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ChildStats {
+    pub pid: u32,
+    pub memory_usage: u64,
+    pub cpu_usage: f32,
+}
+
+/// Service stats information
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Stats {
+    pub name: String,
+    pub pid: u32,
+    pub memory_usage: u64,
+    pub cpu_usage: f32,
+    pub children: Vec<ChildStats>,
+}
+
 /// Client implementation for communicating with Zinit
 pub enum Client {
     Ipc(String), // Socket path
@@ -308,6 +326,24 @@ impl Client {
             }
             Client::Http(client) => client
                 .request("service_get", rpc_params![name])
+                .await
+                .map_err(Into::into),
+        }
+    }
+
+    /// Get memory and CPU usage statistics for a service
+    pub async fn stats(&self, name: impl AsRef<str>) -> Result<Stats, ClientError> {
+        let name = name.as_ref().to_string();
+        match self {
+            Client::Ipc(_) => {
+                let client = self.get_ipc_client().await?;
+                client
+                    .request("service_stats", rpc_params![name])
+                    .await
+                    .map_err(Into::into)
+            }
+            Client::Http(client) => client
+                .request("service_stats", rpc_params![name])
                 .await
                 .map_err(Into::into),
         }
