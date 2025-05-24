@@ -1,10 +1,13 @@
 use crate::manager::{Log, Logs, Process, ProcessManager};
 use crate::zinit::config;
 use crate::zinit::errors::ZInitError;
+#[cfg(target_os = "linux")]
 use crate::zinit::ord::{service_dependency_order, ProcessDAG, DUMMY_ROOT};
 use crate::zinit::service::ZInitService;
 use crate::zinit::state::{State, Target};
-use crate::zinit::types::{ServiceTable, Watcher};
+use crate::zinit::types::ServiceTable;
+#[cfg(target_os = "linux")]
+use crate::zinit::types::Watcher;
 
 // Define a local extension trait for WaitStatus
 trait WaitStatusExt {
@@ -17,16 +20,22 @@ impl WaitStatusExt for WaitStatus {
     }
 }
 use anyhow::Result;
+#[cfg(target_os = "linux")]
 use nix::sys::reboot::RebootMode;
 use nix::sys::signal;
 use nix::sys::wait::WaitStatus;
 use nix::unistd::Pid;
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Notify, RwLock};
+#[cfg(target_os = "linux")]
+use tokio::sync::mpsc;
+use tokio::sync::{Notify, RwLock};
 use tokio::time;
+#[cfg(target_os = "linux")]
 use tokio::time::timeout;
+#[cfg(target_os = "linux")]
 use tokio_stream::StreamExt;
 
 /// Manages the lifecycle of services
@@ -208,16 +217,41 @@ impl LifecycleManager {
     /// Shutdown the system
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down");
-        self.power(RebootMode::RB_POWER_OFF).await
+        #[cfg(target_os = "linux")]
+        return self.power(RebootMode::RB_POWER_OFF).await;
+        
+        #[cfg(not(target_os = "linux"))]
+        {
+            *self.shutdown.write().await = true;
+            if self.container {
+                std::process::exit(0);
+            } else {
+                info!("System shutdown not supported on this platform");
+                std::process::exit(0);
+            }
+        }
     }
 
     /// Reboot the system
     pub async fn reboot(&self) -> Result<()> {
         info!("rebooting");
-        self.power(RebootMode::RB_AUTOBOOT).await
+        #[cfg(target_os = "linux")]
+        return self.power(RebootMode::RB_AUTOBOOT).await;
+        
+        #[cfg(not(target_os = "linux"))]
+        {
+            *self.shutdown.write().await = true;
+            if self.container {
+                std::process::exit(0);
+            } else {
+                info!("System reboot not supported on this platform");
+                std::process::exit(0);
+            }
+        }
     }
 
     /// Power off or reboot the system
+    #[cfg(target_os = "linux")]
     async fn power(&self, mode: RebootMode) -> Result<()> {
         *self.shutdown.write().await = true;
 
@@ -239,6 +273,7 @@ impl LifecycleManager {
         self.kill_process_tree(dag, state_channels, shutdown_timeouts)
             .await?;
 
+        // On Linux, we can use sync and reboot
         nix::unistd::sync();
         if self.container {
             std::process::exit(0);
@@ -250,6 +285,7 @@ impl LifecycleManager {
     }
 
     /// Kill processes in dependency order
+    #[cfg(target_os = "linux")]
     async fn kill_process_tree(
         &self,
         mut dag: ProcessDAG,
@@ -305,6 +341,7 @@ impl LifecycleManager {
     }
 
     /// Wait for a service to be killed
+    #[cfg(target_os = "linux")]
     async fn kill_wait(
         self,
         name: String,

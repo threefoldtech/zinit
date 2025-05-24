@@ -14,3 +14,17 @@ release-aarch64-musl: prepare-aarch64-musl
 
 prepare-aarch64-musl:
 	rustup target add aarch64-unknown-linux-musl
+
+# Build for macOS (both Intel and Apple Silicon)
+release-macos:
+	cargo build --release
+
+# Install to ~/hero/bin (if it exists)
+install-macos: release-macos
+	@if [ -d ~/hero/bin ]; then \
+		cp target/release/zinit ~/hero/bin; \
+		echo "Installed zinit to ~/hero/bin"; \
+	else \
+		echo "~/hero/bin directory not found. Please create it or specify a different installation path."; \
+		exit 1; \
+	fi

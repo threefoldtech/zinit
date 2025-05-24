@@ -1,6 +1,28 @@
-# macOS Installation Guide for Cross-Compilation to aarch64-unknown-linux-musl
+# macOS Guide for Zinit
 
-This guide outlines the steps to set up your macOS environment for cross-compiling Rust projects to the `aarch64-unknown-linux-musl` target. This is particularly useful for building binaries that can run on ARM-based Linux systems (e.g., Raspberry Pi, AWS Graviton) using musl libc.
+This guide covers both building Zinit natively on macOS and cross-compiling from macOS to Linux targets.
+
+## Building Zinit Natively on macOS
+
+Zinit can now be built and run directly on macOS. The code has been updated to handle platform-specific differences between Linux and macOS.
+
+### Building for macOS
+
+```bash
+# Build a release version for macOS
+make release-macos
+
+# Install to ~/hero/bin (if it exists)
+make install-macos
+```
+
+The native macOS build provides most of Zinit's functionality, with the following limitations:
+- System reboot and shutdown operations are not supported (they will exit the process instead)
+- Some Linux-specific features are disabled
+
+## Cross-Compilation from macOS to Linux
+
+This section outlines the steps to set up your macOS environment for cross-compiling Rust projects to the `aarch64-unknown-linux-musl` target. This is particularly useful for building binaries that can run on ARM-based Linux systems (e.g., Raspberry Pi, AWS Graviton) using musl libc.
 
 ## Prerequisites
 
