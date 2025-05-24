@@ -1,7 +1,14 @@
 on:
   push:
-    branches:
-      - development_herocode
+    tags:
+      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release'
+        required: true
+        default: 'v1.0.0'
+
 
 name: Create OSX Release
 
@@ -18,8 +25,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }} - OSX
+          tag_name: ${{ github.event.inputs.tag_name || github.ref }}
+          release_name: Release ${{ github.event.inputs.tag_name || github.ref }} - OSX
           draft: false
           prerelease: false
 
