@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
         .author("ThreeFold Tech, https://github.com/threefoldtech")
         .version(GIT_VERSION)
         .about("A runit replacement")
-        .arg(Arg::with_name("socket").value_name("SOCKET").short("s").long("socket").default_value("/var/run/zinit.sock").help("path to unix socket"))
+        .arg(Arg::with_name("socket").value_name("SOCKET").short("s").long("socket").default_value("/tmp/zinit.sock").help("path to unix socket"))
         .arg(Arg::with_name("debug").short("d").long("debug").help("run in debug mode"))
         .subcommand(
             SubCommand::with_name("init")
@@ -24,8 +24,7 @@ async fn main() -> Result<()> {
                         .value_name("DIR")
                         .short("c")
                         .long("config")
-                        .help("service configurations directory")
-                        .default_value("/etc/zinit/"),
+                        .help("service configurations directory"),
                 )
                 .arg(
                     Arg::with_name("buffer")
@@ -158,14 +157,30 @@ async fn main() -> Result<()> {
         )
         .get_matches();
 
+use dirs; // Add this import
+
     let socket = matches.value_of("socket").unwrap();
     let debug = matches.is_present("debug");
-    //let debug = true;
+
+    let config_path = if let Some(config_arg) = matches.value_of("config") {
+        config_arg.to_string()
+    } else {
+        #[cfg(target_os = "macos")]
+        {
+            let home_dir = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+            home_dir.join("hero").join("cfg").join("zinit").to_str().ok_or_else(|| anyhow::anyhow!("Invalid path for config directory"))?.to_string()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            "/etc/zinit/".to_string()
+        }
+    };
+
     let result = match matches.subcommand() {
         ("init", Some(matches)) => {
             let _server = app::init(
                 matches.value_of("buffer").unwrap().parse().unwrap(),
-                matches.value_of("config").unwrap(),
+                &config_path, // Use the determined config_path
                 socket,
                 matches.is_present("container"),
                 debug,

@@ -58,7 +58,9 @@ pub async fn init(
     container: bool,
     debug: bool,
 ) -> Result<ApiServer> {
-    //std::fs::create_dir_all(config)?;
+    fs::create_dir_all(config)
+        .await
+        .with_context(|| format!("failed to create config directory '{}'", config))?;
     if let Err(err) = logger(if debug {
         log::LevelFilter::Debug
     } else {
