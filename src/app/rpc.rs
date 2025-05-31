@@ -25,16 +25,15 @@ const OPENRPC_SPEC: &str = include_str!("../../openrpc.json");
 /// RPC methods for discovery.
 #[rpc(server, client)]
 pub trait ZinitRpcApi {
-    /// Returns the OpenRPC specification as a JSON Value.
+    /// Returns the OpenRPC specification as a string.
     #[method(name = "rpc.discover")]
-    async fn discover(&self) -> RpcResult<Value>;
+    async fn discover(&self) -> RpcResult<String>;
 }
 
 #[async_trait]
 impl ZinitRpcApiServer for Api {
-    async fn discover(&self) -> RpcResult<Value> {
-        let spec = serde_json::from_str(OPENRPC_SPEC).expect("Failed to parse OpenRPC spec");
-        Ok(spec)
+    async fn discover(&self) -> RpcResult<String> {
+        Ok(OPENRPC_SPEC.to_string())
     }
 }
 

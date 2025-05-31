@@ -326,29 +326,35 @@ impl LifecycleManager {
 
     /// Get memory and CPU usage for a process
     async fn get_process_stats(&self, pid: i32) -> Result<(u64, f32)> {
-        // Create a new System instance
-        let mut system = System::new();
-
+        // Create a new System instance with all information
+        let mut system = System::new_all();
+        
         // Convert i32 pid to sysinfo::Pid
         let sys_pid = sysinfo::Pid::from(pid as usize);
-
+        
+        // Make sure we're refreshing CPU information
+        system.refresh_cpu();
+        system.refresh_processes();
+        
         // First refresh to get initial CPU values
-        system.refresh_process(sys_pid);
-
-        // Wait a short time for CPU measurement
-        sleep(std::time::Duration::from_millis(100)).await;
-
+        system.refresh_all();
+        
+        // Wait longer for CPU measurement (500ms instead of 100ms)
+        sleep(std::time::Duration::from_millis(500)).await;
+        
         // Refresh again to get updated CPU values
-        system.refresh_process(sys_pid);
-
+        system.refresh_cpu();
+        system.refresh_processes();
+        system.refresh_all();
+        
         // Get the process
         if let Some(process) = system.process(sys_pid) {
             // Get memory in bytes
             let memory_usage = process.memory();
-
+            
             // Get CPU usage as percentage
             let cpu_usage = process.cpu_usage();
-
+            
             Ok((memory_usage, cpu_usage))
         } else {
             // Process not found
@@ -360,16 +366,22 @@ impl LifecycleManager {
     async fn get_child_process_stats(&self, parent_pid: i32) -> Result<Vec<ProcessStats>> {
         // Create a new System instance with all processes information
         let mut system = System::new_all();
+        
+        // Make sure we're refreshing CPU information
+        system.refresh_cpu();
+        system.refresh_processes();
         system.refresh_all();
-
+        
         // Convert i32 pid to sysinfo::Pid
         let sys_pid = sysinfo::Pid::from(parent_pid as usize);
-
-        // Wait a short time for CPU measurement
-        sleep(std::time::Duration::from_millis(100)).await;
-
-        // Refresh processes to get updated CPU values
+        
+        // Wait longer for CPU measurement (500ms instead of 100ms)
+        sleep(std::time::Duration::from_millis(500)).await;
+        
+        // Refresh all system information to get updated CPU values
+        system.refresh_cpu();
         system.refresh_processes();
+        system.refresh_all();
 
         let mut children = Vec::new();
 

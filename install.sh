@@ -8,7 +8,9 @@ YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}stop zinit...${NC}"
-curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/stop.sh | bash
+rm -f /tmp/stop.sh
+curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/stop.sh > /tmp/stop.sh
+bash /tmp/stop.sh
 
 
 # GitHub repository information

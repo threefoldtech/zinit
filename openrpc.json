@@ -16,7 +16,7 @@
   ],
   "methods": [
     {
-      "name": "rpc_discover",
+      "name": "rpc.discover",
       "description": "Returns the OpenRPC specification for the API",
       "params": [],
       "result": {
