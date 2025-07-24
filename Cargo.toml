@@ -30,12 +30,12 @@ dirs = "5.0"
 hyper = "1.6"
 # axum = { version = "0.7.4", features = ["http1"] }
 bytes = "1.0"
-jsonrpsee = { version = "0.24.9", features = ["server", "client", "macros"] }
+jsonrpsee = { version = "0.25.1", features = ["server", "client", "macros"] }
 memchr = "2.5.0"
 async-trait = "0.1.88"
 reth-ipc = { git = "https://github.com/paradigmxyz/reth", package = "reth-ipc" }
 tower-http = { version = "0.5", features = ["cors"] }
-tower = "0.4"
+tower = "0.5.2"
 sysinfo = "0.29.10"
 
 [dev-dependencies]
