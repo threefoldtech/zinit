@@ -412,7 +412,11 @@ impl ZinitLoggingApiServer for Api {
                     }
                 });
         while let Some(log) = stream.next().await {
-            if sink.send(serde_json::value::to_raw_value(&log)?).await.is_err() {
+            if sink
+                .send(serde_json::value::to_raw_value(&log)?)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
