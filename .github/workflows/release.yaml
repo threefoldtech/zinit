@@ -76,30 +76,30 @@ jobs:
           if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
             rustup target add x86_64-unknown-linux-musl
           fi
-- name: Setup aarch64 MUSL cross toolchain
-  if: matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-musl'
-  uses: taiki-e/setup-cross-toolchain@v1
-  with:
-    target: aarch64-unknown-linux-musl
+      - name: Setup aarch64 MUSL cross toolchain
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-musl'
+        uses: taiki-e/setup-cross-toolchain@v1
+        with:
+          target: aarch64-unknown-linux-musl
 
-- name: Build release
-  env:
-    CC: ${{ matrix.os == 'macos-latest' && 'clang' || '' }}
-    CXX: ${{ matrix.os == 'macos-latest' && 'clang++' || '' }}
-    MACOSX_DEPLOYMENT_TARGET: '10.12'
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-gcc' || '' }}
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_AR: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-ar' || '' }}
-    CC_aarch64_unknown_linux_musl: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-gcc' || '' }}
-  run: |
-    if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-      export RUSTFLAGS="-C target-feature=+crt-static"
-    fi
-    
-    cargo build --release --target=${{ matrix.target }} --verbose
-    if [ ! -f "target/${{ matrix.target }}/release/zinit" ]; then
-      echo "::error::Binary not found at target/${{ matrix.target }}/release/zinit"
-      exit 1
-    fi
+      - name: Build release
+        env:
+          CC: ${{ matrix.os == 'macos-latest' && 'clang' || '' }}
+          CXX: ${{ matrix.os == 'macos-latest' && 'clang++' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: '10.12'
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-gcc' || '' }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_AR: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-ar' || '' }}
+          CC_aarch64_unknown_linux_musl: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-gcc' || '' }}
+        run: |
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            export RUSTFLAGS="-C target-feature=+crt-static"
+          fi
+          
+          cargo build --release --target=${{ matrix.target }} --verbose
+          if [ ! -f "target/${{ matrix.target }}/release/zinit" ]; then
+            echo "::error::Binary not found at target/${{ matrix.target }}/release/zinit"
+            exit 1
+          fi
 
 
       - name: Strip binary (Linux)
