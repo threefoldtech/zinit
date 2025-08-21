@@ -105,7 +105,18 @@ jobs:
       - name: Strip binary (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          llvm-strip target/${{ matrix.target }}/release/zinit || strip target/${{ matrix.target }}/release/zinit
+          # Use cross-toolchain strip if available (provided by taiki-e/setup-cross-toolchain)
+          if [[ -n "${STRIP:-}" ]]; then
+            "$STRIP" "target/${{ matrix.target }}/release/zinit" || true
+          # For aarch64-musl, prefer the target-specific strip if present
+          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]] && command -v aarch64-unknown-linux-musl-strip >/dev/null 2>&1; then
+            aarch64-unknown-linux-musl-strip "target/${{ matrix.target }}/release/zinit" || true
+          # Fall back to llvm-strip if installed, else to system strip
+          elif command -v llvm-strip >/dev/null 2>&1; then
+            llvm-strip "target/${{ matrix.target }}/release/zinit" || strip "target/${{ matrix.target }}/release/zinit" || true
+          else
+            strip "target/${{ matrix.target }}/release/zinit" || true
+          fi
 
       - name: Strip binary (macOS)
         if: matrix.os == 'macos-latest'
