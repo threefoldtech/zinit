@@ -1,8 +1,7 @@
 on:
   push:
-    # Sequence of patterns matched against refs/tags
     tags:
-      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
+      - "v*"
 
 name: Create Release
 
@@ -13,13 +12,16 @@ jobs:
     permissions:
       contents: write
     strategy:
-      fail-fast: false  # Continue with other builds if one fails
+      fail-fast: false
       matrix:
         include:
           # Linux builds
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             binary_name: zinit-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            binary_name: zinit-linux-aarch64
           # macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -27,13 +29,13 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: zinit-macos-aarch64
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history for proper versioning
+          fetch-depth: 0
       
-      # Cache Rust dependencies
       - name: Cache Rust dependencies
         uses: actions/cache@v3
         with:
@@ -44,55 +46,57 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
-      
+
       - name: Setup build environment (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          # Install required build tools for macOS
           brew install llvm
-          
-          # For cross-compilation to Apple Silicon when on Intel
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             rustup target add aarch64-apple-darwin
           fi
-      
+
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: ${{ matrix.target }}
           override: true
-          profile: minimal  # Minimal components for faster installation
-      
+          profile: minimal
+
       - name: Install MUSL tools (Linux)
-        if: matrix.os == 'ubuntu-latest' && contains(matrix.target, 'musl')
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev
-      
+          sudo apt-get install -y musl-tools musl-dev gcc-aarch64-linux-gnu
+
+          # Install required Rust targets
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            rustup target add aarch64-unknown-linux-musl
+          fi
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
+            rustup target add x86_64-unknown-linux-musl
+          fi
+
       - name: Build release
         env:
-          CC: ${{ matrix.os == 'macos-latest' && 'clang' || '' }}
-          CXX: ${{ matrix.os == 'macos-latest' && 'clang++' || '' }}
+          CC: ${{ (matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-gnu-gcc') || (matrix.os == 'macos-latest' && 'clang') || '' }}
+          CXX: ${{ (matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-gnu-g++') || (matrix.os == 'macos-latest' && 'clang++') || '' }}
           MACOSX_DEPLOYMENT_TARGET: '10.12'
         run: |
-          # Add special flags for Apple Silicon builds
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             export RUSTFLAGS="-C target-feature=+crt-static"
           fi
           
           cargo build --release --target=${{ matrix.target }} --verbose
-          
-          # Verify binary exists
           if [ ! -f "target/${{ matrix.target }}/release/zinit" ]; then
             echo "::error::Binary not found at target/${{ matrix.target }}/release/zinit"
             exit 1
           fi
-      
+
       - name: Strip binary (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          strip target/${{ matrix.target }}/release/zinit
+          llvm-strip target/${{ matrix.target }}/release/zinit || strip target/${{ matrix.target }}/release/zinit
 
       - name: Strip binary (macOS)
         if: matrix.os == 'macos-latest'
@@ -102,19 +106,13 @@ jobs:
       - name: Rename binary
         run: |
           cp target/${{ matrix.target }}/release/zinit ${{ matrix.binary_name }}
-          
-          # Verify binary was copied successfully
           if [ ! -f "${{ matrix.binary_name }}" ]; then
             echo "::error::Binary not copied successfully to ${{ matrix.binary_name }}"
             exit 1
           fi
-          
-          # Show binary info for debugging
-          echo "Binary details for ${{ matrix.binary_name }}:"
           ls -la ${{ matrix.binary_name }}
           file ${{ matrix.binary_name }} || true
       
-          # Upload artifacts even if the release step fails
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
