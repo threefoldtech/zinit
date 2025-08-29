@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tokio_stream::StreamExt;
 
-use anyhow::Error as AnyError;
 use crate::zinit::errors::ZInitError;
+use anyhow::Error as AnyError;
 
 use super::api::Api;
 
@@ -45,16 +45,45 @@ fn code_name_from(code: i32) -> &'static str {
 }
 
 // Map ZInit/anyhow error -> JSON-RPC ErrorObjectOwned with structured details.
-fn zinit_err_to_rpc(err: AnyError, action: &str, service: Option<&str>, default_code: i32) -> ErrorObjectOwned {
+fn zinit_err_to_rpc(
+    err: AnyError,
+    action: &str,
+    service: Option<&str>,
+    default_code: i32,
+) -> ErrorObjectOwned {
     // Choose code/name/message from domain errors when possible
     let (code, code_name, top_msg) = match err.downcast_ref::<ZInitError>() {
-        Some(ZInitError::UnknownService { name }) => (SERVICE_NOT_FOUND, "ServiceNotFound", format!("service '{}' not found", name)),
-        Some(ZInitError::ServiceAlreadyMonitored { name }) => (SERVICE_ALREADY_MONITORED, "ServiceAlreadyMonitored", format!("service '{}' already monitored", name)),
-        Some(ZInitError::ServiceIsUp { name }) => (SERVICE_IS_UP, "ServiceIsUp", format!("service '{}' is up", name)),
-        Some(ZInitError::ServiceIsDown { name }) => (SERVICE_IS_DOWN, "ServiceIsDown", format!("service '{}' is down", name)),
-        Some(ZInitError::ShuttingDown) => (SHUTTING_DOWN, "ShuttingDown", "system is shutting down".to_string()),
-        Some(ZInitError::InvalidStateTransition { message }) => (-32009, "InvalidStateTransition", message.clone()),
-        Some(ZInitError::DependencyError { message }) => (-32010, "DependencyError", message.clone()),
+        Some(ZInitError::UnknownService { name }) => (
+            SERVICE_NOT_FOUND,
+            "ServiceNotFound",
+            format!("service '{}' not found", name),
+        ),
+        Some(ZInitError::ServiceAlreadyMonitored { name }) => (
+            SERVICE_ALREADY_MONITORED,
+            "ServiceAlreadyMonitored",
+            format!("service '{}' already monitored", name),
+        ),
+        Some(ZInitError::ServiceIsUp { name }) => (
+            SERVICE_IS_UP,
+            "ServiceIsUp",
+            format!("service '{}' is up", name),
+        ),
+        Some(ZInitError::ServiceIsDown { name }) => (
+            SERVICE_IS_DOWN,
+            "ServiceIsDown",
+            format!("service '{}' is down", name),
+        ),
+        Some(ZInitError::ShuttingDown) => (
+            SHUTTING_DOWN,
+            "ShuttingDown",
+            "system is shutting down".to_string(),
+        ),
+        Some(ZInitError::InvalidStateTransition { message }) => {
+            (-32009, "InvalidStateTransition", message.clone())
+        }
+        Some(ZInitError::DependencyError { message }) => {
+            (-32010, "DependencyError", message.clone())
+        }
         Some(ZInitError::ProcessError { message }) => (-32011, "ProcessError", message.clone()),
         None => (default_code, code_name_from(default_code), err.to_string()),
     };
@@ -199,30 +228,34 @@ pub trait ZinitServiceApi {
 #[async_trait]
 impl ZinitServiceApiServer for Api {
     async fn list(&self) -> RpcResult<HashMap<String, String>> {
-        let services = self
-            .zinit
-            .list()
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "listing services", None, ErrorCode::InternalError.code()))?;
+        let services = self.zinit.list().await.map_err(|e| {
+            zinit_err_to_rpc(e, "listing services", None, ErrorCode::InternalError.code())
+        })?;
 
         let mut map: HashMap<String, String> = HashMap::new();
         for service in services {
-            let state = self
-                .zinit
-                .status(&service)
-                .await
-                .map_err(|e| zinit_err_to_rpc(e, "getting status", Some(&service), ErrorCode::InternalError.code()))?;
+            let state = self.zinit.status(&service).await.map_err(|e| {
+                zinit_err_to_rpc(
+                    e,
+                    "getting status",
+                    Some(&service),
+                    ErrorCode::InternalError.code(),
+                )
+            })?;
             map.insert(service, format!("{:?}", state.state));
         }
         Ok(map)
     }
 
     async fn status(&self, name: String) -> RpcResult<Status> {
-        let status = self
-            .zinit
-            .status(&name)
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "getting status", Some(&name), ErrorCode::InternalError.code()))?;
+        let status = self.zinit.status(&name).await.map_err(|e| {
+            zinit_err_to_rpc(
+                e,
+                "getting status",
+                Some(&name),
+                ErrorCode::InternalError.code(),
+            )
+        })?;
 
         let result = Status {
             name: name.clone(),
@@ -246,17 +279,25 @@ impl ZinitServiceApiServer for Api {
     }
 
     async fn start(&self, name: String) -> RpcResult<()> {
-        self.zinit
-            .start(name.clone())
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "starting service", Some(&name), ErrorCode::InternalError.code()))
+        self.zinit.start(name.clone()).await.map_err(|e| {
+            zinit_err_to_rpc(
+                e,
+                "starting service",
+                Some(&name),
+                ErrorCode::InternalError.code(),
+            )
+        })
     }
 
     async fn stop(&self, name: String) -> RpcResult<()> {
-        self.zinit
-            .stop(name.clone())
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "stopping service", Some(&name), ErrorCode::InternalError.code()))
+        self.zinit.stop(name.clone()).await.map_err(|e| {
+            zinit_err_to_rpc(
+                e,
+                "stopping service",
+                Some(&name),
+                ErrorCode::InternalError.code(),
+            )
+        })
     }
 
     async fn monitor(&self, name: String) -> RpcResult<()> {
@@ -265,39 +306,53 @@ impl ZinitServiceApiServer for Api {
             return Err(invalid_service_name_error("monitoring service", &name));
         }
 
-        let (name_str, service) = config::load(format!("{}.yaml", name))
-            .map_err(|e| {
-                ErrorObjectOwned::owned(
-                    CONFIG_ERROR,
-                    format!("monitoring service: failed to load '{}.yaml'", name),
-                    Some(json!({
-                        "code_name": "ConfigError",
-                        "action": "loading service config",
-                        "service": name,
-                        "hint": "Verify the YAML file exists and is valid"
-                    })),
-                )
-            })?;
+        let (name_str, service) = config::load(format!("{}.yaml", name)).map_err(|e| {
+            ErrorObjectOwned::owned(
+                CONFIG_ERROR,
+                format!("monitoring service: failed to load '{}.yaml'", name),
+                Some(json!({
+                    "code_name": "ConfigError",
+                    "action": "loading service config",
+                    "service": name,
+                    "hint": "Verify the YAML file exists and is valid"
+                })),
+            )
+        })?;
 
         self.zinit
             .monitor(name_str.clone(), service)
             .await
-            .map_err(|e| zinit_err_to_rpc(e, "monitoring service", Some(&name_str), ErrorCode::InternalError.code()))
+            .map_err(|e| {
+                zinit_err_to_rpc(
+                    e,
+                    "monitoring service",
+                    Some(&name_str),
+                    ErrorCode::InternalError.code(),
+                )
+            })
     }
 
     async fn forget(&self, name: String) -> RpcResult<()> {
-        self.zinit
-            .forget(name.clone())
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "forgetting service", Some(&name), ErrorCode::InternalError.code()))
+        self.zinit.forget(name.clone()).await.map_err(|e| {
+            zinit_err_to_rpc(
+                e,
+                "forgetting service",
+                Some(&name),
+                ErrorCode::InternalError.code(),
+            )
+        })
     }
 
     async fn kill(&self, name: String, signal: String) -> RpcResult<()> {
         if let Ok(sig) = nix::sys::signal::Signal::from_str(&signal.to_uppercase()) {
-            self.zinit
-                .kill(name.clone(), sig)
-                .await
-                .map_err(|e| zinit_err_to_rpc(e, "sending signal", Some(&name), ErrorCode::InternalError.code()))
+            self.zinit.kill(name.clone(), sig).await.map_err(|e| {
+                zinit_err_to_rpc(
+                    e,
+                    "sending signal",
+                    Some(&name),
+                    ErrorCode::InternalError.code(),
+                )
+            })
         } else {
             Err(invalid_signal_error(&signal))
         }
@@ -345,11 +400,21 @@ impl ZinitServiceApiServer for Api {
         })?;
 
         // Write the YAML content to the file
-        let mut file = fs::File::create(&file_path)
-            .map_err(|_| service_file_error("creating service file", &name, "failed to create service file"))?;
+        let mut file = fs::File::create(&file_path).map_err(|_| {
+            service_file_error(
+                "creating service file",
+                &name,
+                "failed to create service file",
+            )
+        })?;
 
-        file.write_all(yaml_content.as_bytes())
-            .map_err(|_| service_file_error("writing service file", &name, "failed to write service file"))?;
+        file.write_all(yaml_content.as_bytes()).map_err(|_| {
+            service_file_error(
+                "writing service file",
+                &name,
+                "failed to write service file",
+            )
+        })?;
 
         Ok(format!("Service '{}' created successfully", name))
     }
@@ -381,8 +446,13 @@ impl ZinitServiceApiServer for Api {
         }
 
         // Delete the file
-        fs::remove_file(&file_path)
-            .map_err(|_| service_file_error("deleting service file", &name, "failed to delete service file"))?;
+        fs::remove_file(&file_path).map_err(|_| {
+            service_file_error(
+                "deleting service file",
+                &name,
+                "failed to delete service file",
+            )
+        })?;
 
         Ok(format!("Service '{}' deleted successfully", name))
     }
@@ -414,8 +484,9 @@ impl ZinitServiceApiServer for Api {
         }
 
         // Read the file content
-        let yaml_content = fs::read_to_string(&file_path)
-            .map_err(|_| service_file_error("reading service file", &name, "failed to read service file"))?;
+        let yaml_content = fs::read_to_string(&file_path).map_err(|_| {
+            service_file_error("reading service file", &name, "failed to read service file")
+        })?;
 
         // Parse YAML to JSON
         let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_content).map_err(|_| {
@@ -448,11 +519,14 @@ impl ZinitServiceApiServer for Api {
     }
 
     async fn stats(&self, name: String) -> RpcResult<Stats> {
-        let stats = self
-            .zinit
-            .stats(&name)
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "collecting stats", Some(&name), ErrorCode::InternalError.code()))?;
+        let stats = self.zinit.stats(&name).await.map_err(|e| {
+            zinit_err_to_rpc(
+                e,
+                "collecting stats",
+                Some(&name),
+                ErrorCode::InternalError.code(),
+            )
+        })?;
 
         let result = Stats {
             name: name.clone(),
@@ -504,17 +578,21 @@ impl ZinitSystemApiServer for Api {
     }
 
     async fn reboot(&self) -> RpcResult<()> {
-        self.zinit
-            .reboot()
-            .await
-            .map_err(|e| zinit_err_to_rpc(e, "system reboot", None, ErrorCode::InternalError.code()))
+        self.zinit.reboot().await.map_err(|e| {
+            zinit_err_to_rpc(e, "system reboot", None, ErrorCode::InternalError.code())
+        })
     }
 
     async fn start_http_server(&self, address: String) -> RpcResult<String> {
         // Call the method from the API implementation
         match crate::app::api::Api::start_http_server(self, address).await {
             Ok(result) => Ok(result),
-            Err(e) => Err(zinit_err_to_rpc(AnyError::from(e), "starting http server", None, ErrorCode::InternalError.code())),
+            Err(e) => Err(zinit_err_to_rpc(
+                AnyError::from(e),
+                "starting http server",
+                None,
+                ErrorCode::InternalError.code(),
+            )),
         }
     }
 
@@ -522,7 +600,12 @@ impl ZinitSystemApiServer for Api {
         // Call the method from the API implementation
         match crate::app::api::Api::stop_http_server(self).await {
             Ok(_) => Ok(()),
-            Err(e) => Err(zinit_err_to_rpc(AnyError::from(e), "stopping http server", None, ErrorCode::InternalError.code())),
+            Err(e) => Err(zinit_err_to_rpc(
+                AnyError::from(e),
+                "stopping http server",
+                None,
+                ErrorCode::InternalError.code(),
+            )),
         }
     }
 }

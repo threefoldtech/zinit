@@ -88,10 +88,16 @@ impl From<RpcError> for ClientError {
 
             let human = match (service, action, hint) {
                 (Some(s), Some(a), Some(h)) => {
-                    format!("{}[{}]: {} while {} '{}'. Hint: {}. Details: {:?}", code_name, code, message, a, s, h, chain)
+                    format!(
+                        "{}[{}]: {} while {} '{}'. Hint: {}. Details: {:?}",
+                        code_name, code, message, a, s, h, chain
+                    )
                 }
                 (Some(s), Some(a), None) => {
-                    format!("{}[{}]: {} while {} '{}'. Details: {:?}", code_name, code, message, a, s, chain)
+                    format!(
+                        "{}[{}]: {} while {} '{}'. Details: {:?}",
+                        code_name, code, message, a, s, chain
+                    )
                 }
                 _ => {
                     format!("{}[{}]: {}. Details: {:?}", code_name, code, message, chain)
