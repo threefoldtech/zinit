@@ -21,8 +21,20 @@ pub enum ClientError {
     #[error("service not found: {0}")]
     ServiceNotFound(String),
 
+    #[error("service already monitored: {0}")]
+    ServiceAlreadyMonitored(String),
+
     #[error("service is already up: {0}")]
     ServiceIsUp(String),
+
+    #[error("service is down: {0}")]
+    ServiceIsDown(String),
+
+    #[error("invalid signal: {0}")]
+    InvalidSignal(String),
+
+    #[error("config error: {0}")]
+    ConfigError(String),
 
     #[error("system is shutting down")]
     ShuttingDown,
@@ -42,16 +54,62 @@ pub enum ClientError {
 
 impl From<RpcError> for ClientError {
     fn from(err: RpcError) -> Self {
-        // Parse the error code if available
-        if let RpcError::Call(err) = &err {
-            match err.code() {
-                -32000 => return ClientError::ServiceNotFound(err.message().to_string()),
-                -32002 => return ClientError::ServiceIsUp(err.message().to_string()),
-                -32006 => return ClientError::ShuttingDown,
-                -32007 => return ClientError::ServiceAlreadyExists(err.message().to_string()),
-                -32008 => return ClientError::ServiceFileError(err.message().to_string()),
-                _ => {}
-            }
+        if let RpcError::Call(call) = &err {
+            let code = call.code();
+            let message = call.message().to_string();
+
+            // Try to parse structured data payload if present
+            let details: Option<serde_json::Value> = call
+                .data()
+                .and_then(|raw| serde_json::from_str(raw.get()).ok());
+
+            let code_name = details
+                .as_ref()
+                .and_then(|d| d.get("code_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
+
+            let service = details
+                .as_ref()
+                .and_then(|d| d.get("service"))
+                .and_then(|v| v.as_str());
+
+            let action = details
+                .as_ref()
+                .and_then(|d| d.get("action"))
+                .and_then(|v| v.as_str());
+
+            let hint = details
+                .as_ref()
+                .and_then(|d| d.get("hint"))
+                .and_then(|v| v.as_str());
+
+            let chain = details.as_ref().and_then(|d| d.get("cause_chain")).cloned();
+
+            let human = match (service, action, hint) {
+                (Some(s), Some(a), Some(h)) => {
+                    format!("{}[{}]: {} while {} '{}'. Hint: {}. Details: {:?}", code_name, code, message, a, s, h, chain)
+                }
+                (Some(s), Some(a), None) => {
+                    format!("{}[{}]: {} while {} '{}'. Details: {:?}", code_name, code, message, a, s, chain)
+                }
+                _ => {
+                    format!("{}[{}]: {}. Details: {:?}", code_name, code, message, chain)
+                }
+            };
+
+            return match code {
+                -32000 => ClientError::ServiceNotFound(human),
+                -32001 => ClientError::ServiceAlreadyMonitored(human),
+                -32002 => ClientError::ServiceIsUp(human),
+                -32003 => ClientError::ServiceIsDown(human),
+                -32004 => ClientError::InvalidSignal(human),
+                -32005 => ClientError::ConfigError(human),
+                -32006 => ClientError::ShuttingDown,
+                -32007 => ClientError::ServiceAlreadyExists(human),
+                -32008 => ClientError::ServiceFileError(human),
+                _ => ClientError::RpcError(human),
+            };
         }
 
         match err {
