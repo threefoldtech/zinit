@@ -35,10 +35,10 @@ This repository is owned and maintained by TF-Tech NV, a Belgian company respons
 ## Installation
 
 ```bash
-curl https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install.sh | bash
+curl https://raw.githubusercontent.com/threefoldtech/zos_zinit/refs/heads/master/install.sh | bash
 
 # to install & run
-curl https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install_run.sh | bash
+curl https://raw.githubusercontent.com/threefoldtech/zos_zinit/refs/heads/master/install_run.sh | bash
 ```
 
 Click [here](docs/installation.md) for more information on how to install ZOS Init.
