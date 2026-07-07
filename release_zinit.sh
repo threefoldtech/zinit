@@ -97,5 +97,5 @@ echo "🚀 Pushing tag to trigger release..."
 git push origin "$new_version"
 
 echo "✅ Release $new_version has been triggered!"
-echo "🔗 Check the release at: https://github.com/threefoldtech/zinit/releases"
-echo "🔗 Monitor the build at: https://github.com/threefoldtech/zinit/actions"
+echo "🔗 Check the release at: https://github.com/threefoldtech/zos_zinit/releases"
+echo "🔗 Monitor the build at: https://github.com/threefoldtech/zos_zinit/actions"

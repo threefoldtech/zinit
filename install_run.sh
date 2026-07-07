@@ -19,11 +19,11 @@ is_zinit_running() {
 echo -e "${GREEN}Starting zinit installation and setup...${NC}"
 # Download and execute install.sh
 echo -e "${YELLOW}Downloading and executing install.sh...${NC}"
-curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/threefoldtech/zos_zinit/refs/heads/master/install.sh | bash
 
 echo -e "${GREEN}install zinit...${NC}"
 rm -f /tmp/install.sh
-curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/install.sh > /tmp/install.sh
+curl -fsSL https://raw.githubusercontent.com/threefoldtech/zos_zinit/refs/heads/master/install.sh > /tmp/install.sh
 bash /tmp/install.sh
 
 
