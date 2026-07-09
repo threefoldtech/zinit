@@ -15,7 +15,7 @@ If pre-built binaries are available for your system, you can install them direct
 
 ```bash
 # Download the binary (replace with actual URL)
-wget https://github.com/threefoldtech/zos_zinit/releases/download/vX.Y.Z/zinit-x86_64-unknown-linux-musl
+wget https://github.com/threefoldtech/zinit/releases/download/vX.Y.Z/zinit-x86_64-unknown-linux-musl
 
 # Make it executable
 chmod +x zinit-x86_64-unknown-linux-musl
@@ -69,7 +69,7 @@ apk add build-base
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/threefoldtech/zos_zinit.git
+git clone https://github.com/threefoldtech/zinit.git
 cd zinit
 ```
 

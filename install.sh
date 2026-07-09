@@ -9,12 +9,12 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}stop zinit...${NC}"
 rm -f /tmp/stop.sh
-curl -fsSL https://raw.githubusercontent.com/threefoldtech/zos_zinit/refs/heads/master/stop.sh > /tmp/stop.sh
+curl -fsSL https://raw.githubusercontent.com/threefoldtech/zinit/refs/heads/master/stop.sh > /tmp/stop.sh
 bash /tmp/stop.sh
 
 
 # GitHub repository information
-GITHUB_REPO="threefoldtech/zos_zinit"
+GITHUB_REPO="threefoldtech/zinit"
 
 # Get the latest version from GitHub API
 echo -e "${YELLOW}Fetching latest version information...${NC}"
